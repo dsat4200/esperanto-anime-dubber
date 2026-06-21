@@ -124,6 +124,26 @@ def extract_full_audio(mkv_path: Path, out_path: Path, audio_stream_index: int =
     return out_path
 
 
+def extract_full_audio_resampled(
+    mkv_path: Path, out_path: Path, target_sr: int = 44100, audio_stream_index: int = 0,
+) -> Path:
+    mkv_path = Path(mkv_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path = _ffmpeg_bin()
+    cmd = [
+        bin_path, "-y", "-loglevel", "error",
+        "-i", str(mkv_path),
+        "-map", f"0:a:{audio_stream_index}",
+        "-ar", str(target_sr),
+        "-ac", "2",
+        "-sample_fmt", "s16",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True)
+    return out_path
+
+
 def fit_audio_to_duration(
     in_path: Path,
     out_path: Path,
