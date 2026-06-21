@@ -9,14 +9,14 @@ Timer: 100.0000
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Screen-Sign,Abyss Ep Title Font,38,&H00ffffff,&H000000ff,&H00101010,&H00000000,0,0,0,0,100.00,100.00,0.00,0.00,1,1.60,0.00,2,10,10,10,1
-Style: title,Angeleobardo,60,&H002ae894,&H000000ff,&H00d8f4ef,&H00000000,0,0,0,0,100.00,100.00,0.00,0.00,1,0.75,0.00,2,10,10,10,1
 Style: overlap,Cronos Pro Caption,53,&H00ffffff,&H000000ff,&H205a3344,&H205a3344,0,0,0,0,95.00,100.00,0.00,0.00,1,3.25,0.75,2,40,40,21,1
+Style: title,Angeleobardo,60,&H002ae894,&H000000ff,&H00d8f4ef,&H00000000,0,0,0,0,100.00,100.00,0.00,0.00,1,0.75,0.00,2,10,10,10,1
 Style: note,Cronos Pro Caption,45,&H00ffffff,&H000000ff,&H204a2e61,&H204a2e61,0,0,0,0,95.00,100.00,0.00,0.00,1,2.75,0.50,8,40,40,21,1
 Style: Default,Arial,30,&H00ffffff,&H000000ff,&H00000000,&H00000000,0,0,0,0,100.00,100.00,0.00,0.00,1,3.00,3.00,2,20,20,15,1
 Style: main,Cronos Pro Caption,53,&H00ffffff,&H000000ff,&H201e3619,&H201e3619,0,0,0,0,95.00,100.00,0.00,0.00,1,3.25,0.50,2,20,20,21,1
 Style: ed-eng,Balzano,53,&H0aeafef5,&H000000ff,&H009a7f49,&H00000000,-1,0,0,0,100.00,100.00,2.00,0.00,1,3.00,1.00,3,30,25,25,1
-Style: op-eng,Neo Sans Intel,45,&H0aeafef5,&H000000ff,&H403f130e,&H00000000,-1,0,0,0,100.00,100.00,2.00,0.00,1,4.50,0.00,1,30,25,25,1
 Style: ed-rom,Balzano,53,&H0aeafef5,&H000000ff,&H005c504b,&H00000000,-1,0,0,0,100.00,100.00,2.00,0.00,1,3.00,0.00,7,20,30,20,1
+Style: op-eng,Neo Sans Intel,45,&H0aeafef5,&H000000ff,&H403f130e,&H00000000,-1,0,0,0,100.00,100.00,2.00,0.00,1,4.50,0.00,1,30,25,25,1
 Style: op-rom,Neo Sans Intel,45,&H0aeafef5,&H000000ff,&H403c0037,&H00000000,-1,0,0,0,100.00,100.00,2.00,0.00,1,4.50,0.00,9,20,30,20,1
 
 [Events]
@@ -35,27 +35,27 @@ Dialogue: 0,0:01:06.79,0:01:10.83,main,,0000,0000,0000,,Neniel ŝi venus en mian
 Dialogue: 0,0:01:10.83,0:01:11.80,main,,0000,0000,0000,,Onii-chan?
 Dialogue: 0,0:01:11.80,0:01:14.34,main,,0000,0000,0000,,Esence, kion mi provas diri estas...
 Dialogue: 0,0:01:14.34,0:01:16.71,main,,0000,0000,0000,,Ne estas maniero, ke mia fratino ne povas esti tiel bela—
-Dialogue: 0,0:01:29.86,0:01:37.15,op-rom,,0000,0000,0000,,Kian vizaĝon mi faru, se mi ne traktas vin tiel afable?
-Dialogue: 0,0:01:29.86,0:01:37.15,op-eng,,0000,0000,0000,,Ne estu tiel afabla al mi, mi simple ne scias kiel reagi
-Dialogue: 0,0:01:37.15,0:01:47.26,op-rom,,0000,0000,0000,,Mi ne povas vidi vian profilon pro la amasigitaj vortoj
-Dialogue: 0,0:01:37.15,0:01:47.26,op-eng,,0000,0000,0000,,Kun ĉiuj ĉi vortoj amasiĝantaj, mi eĉ ne povas vidi vian vizaĝon
-Dialogue: 0,0:01:52.21,0:01:59.56,op-rom,,0000,0000,0000,,Kie ĝi estas?Mi ne povas trovi miajn perditajn ŝlosilojn, panjo.
-Dialogue: 0,0:01:52.21,0:01:59.56,op-eng,,0000,0000,0000,,Kie ĝi estas?Mi perdis mian ŝlosilon, nun mi ne trovas ĝin
-Dialogue: 0,0:01:59.56,0:02:06.23,op-rom,,0000,0000,0000,,Mi laciĝas daŭrigi miajn ĝemojn dum ni preterpasas.
-Dialogue: 0,0:01:59.56,0:02:06.23,op-eng,,0000,0000,0000,,Suspiro, mi elĉerpiĝos, se mi daŭre agas tiel, kiam ajn ni maltrafos
-Dialogue: 0,0:02:06.23,0:02:12.95,op-rom,,0000,0000,0000,,La distanco inter vi kaj mi estas iom pli proksima al la libro.
-Dialogue: 0,0:02:06.23,0:02:12.95,op-eng,,0000,0000,0000,,Eble ni estas proksimaj?Mi simple ne povas eltrovi
-Dialogue: 0,0:02:12.95,0:02:20.32,op-rom,,0000,0000,0000,,Mi ne povas bone kompreni ĝin, sed post iom da tempo
-Dialogue: 0,0:02:12.95,0:02:20.32,op-eng,,0000,0000,0000,,Kiom malproksime mi estas, kvankam vi estas ĝuste tie
-Dialogue: 0,0:02:20.32,0:02:27.17,op-rom,,0000,0000,0000,,Ne estu tiel afabla al mi, ni denove vundu unu la alian
-Dialogue: 0,0:02:20.32,0:02:27.17,op-eng,,0000,0000,0000,,Ne estu tiel agrabla al mi, ĉu vi?Ni denove vundas unu la alian
-Dialogue: 0,0:02:27.17,0:02:34.29,op-rom,,0000,0000,0000,,Eĉ kun ĉiuj mensogoj, kiujn mi amasigis, mi ne povas moviĝi
-Dialogue: 0,0:02:27.17,0:02:34.29,op-eng,,0000,0000,0000,,Kun ĉiuj ĉi mensogoj amasiĝantaj, mi eĉ ne povas moviĝi
-Dialogue: 0,0:02:34.29,0:02:41.60,op-rom,,0000,0000,0000,,Mi volas tuj enamiĝi, sed mi ne trovas la vortojn.
-Dialogue: 0,0:02:34.29,0:02:41.60,op-eng,,0000,0000,0000,,Mi volas vidi vin nun, sed mi ne scias kion diri
-Dialogue: 0,0:02:41.60,0:02:51.94,op-rom,,0000,0000,0000,,La lasta paĝo?Mi volas montri al vi rideton
-Dialogue: 0,0:02:41.60,0:02:51.94,op-eng,,0000,0000,0000,,Ĉu ĉi tio estas la fino de nia rakonto?Mi volas, ke vi vidu mian rideton
-Dialogue: 0,0:02:59.15,0:03:02.68,title,,0000,0000,0000,,{\alphaff\t(700,1443,0.8,\alpha00)}{\shad0\fs60\fnAngeleobardo\c&H4ED67F&\bord0.15\be1\frz3.325\pos(750,595.5)}Ne ekzistas maniero, ke mi povus ami mian fratinon
+Dialogue: 0,0:01:29.86,0:01:37.15,op-rom,,0000,0000,0000,,(MUSIC) Kian vizaĝon mi faru, se mi ne traktas vin tiel afable?
+Dialogue: 0,0:01:29.86,0:01:37.15,op-eng,,0000,0000,0000,,(MUSIC) Ne estu tiel afabla al mi, mi simple ne scias kiel reagi
+Dialogue: 0,0:01:37.15,0:01:47.26,op-rom,,0000,0000,0000,,(MUSIC) Mi ne povas vidi vian profilon pro la amasigitaj vortoj
+Dialogue: 0,0:01:37.15,0:01:47.26,op-eng,,0000,0000,0000,,(MUSIC) Kun ĉiuj ĉi vortoj amasiĝantaj, mi eĉ ne povas vidi vian vizaĝon
+Dialogue: 0,0:01:52.21,0:01:59.56,op-rom,,0000,0000,0000,,(MUSIC) Kie ĝi estas?Mi ne povas trovi miajn perditajn ŝlosilojn, panjo.
+Dialogue: 0,0:01:52.21,0:01:59.56,op-eng,,0000,0000,0000,,(MUSIC) Kie ĝi estas?Mi perdis mian ŝlosilon, nun mi ne trovas ĝin
+Dialogue: 0,0:01:59.56,0:02:06.23,op-rom,,0000,0000,0000,,(MUSIC) Mi laciĝas daŭrigi miajn ĝemojn dum ni preterpasas.
+Dialogue: 0,0:01:59.56,0:02:06.23,op-eng,,0000,0000,0000,,(MUSIC) Suspiro, mi elĉerpiĝos, se mi daŭre agas tiel, kiam ajn ni maltrafos
+Dialogue: 0,0:02:06.23,0:02:12.95,op-rom,,0000,0000,0000,,(MUSIC) La distanco inter vi kaj mi estas iom pli proksima al la libro.
+Dialogue: 0,0:02:06.23,0:02:12.95,op-eng,,0000,0000,0000,,(MUSIC) Eble ni estas proksimaj?Mi simple ne povas eltrovi
+Dialogue: 0,0:02:12.95,0:02:20.32,op-rom,,0000,0000,0000,,(MUSIC) Mi ne povas bone kompreni ĝin, sed post iom da tempo
+Dialogue: 0,0:02:12.95,0:02:20.32,op-eng,,0000,0000,0000,,(MUSIC) Kiom malproksime mi estas, kvankam vi estas ĝuste tie
+Dialogue: 0,0:02:20.32,0:02:27.17,op-rom,,0000,0000,0000,,(MUSIC) Ne estu tiel afabla al mi, ni denove vundu unu la alian
+Dialogue: 0,0:02:20.32,0:02:27.17,op-eng,,0000,0000,0000,,(MUSIC) Ne estu tiel agrabla al mi, ĉu vi?Ni denove vundas unu la alian
+Dialogue: 0,0:02:27.17,0:02:34.29,op-rom,,0000,0000,0000,,(MUSIC) Eĉ kun ĉiuj mensogoj, kiujn mi amasigis, mi ne povas moviĝi
+Dialogue: 0,0:02:27.17,0:02:34.29,op-eng,,0000,0000,0000,,(MUSIC) Kun ĉiuj ĉi mensogoj amasiĝantaj, mi eĉ ne povas moviĝi
+Dialogue: 0,0:02:34.29,0:02:41.60,op-rom,,0000,0000,0000,,(MUSIC) Mi volas tuj enamiĝi, sed mi ne trovas la vortojn.
+Dialogue: 0,0:02:34.29,0:02:41.60,op-eng,,0000,0000,0000,,(MUSIC) Mi volas vidi vin nun, sed mi ne scias kion diri
+Dialogue: 0,0:02:41.60,0:02:51.94,op-rom,,0000,0000,0000,,(MUSIC) La lasta paĝo?Mi volas montri al vi rideton
+Dialogue: 0,0:02:41.60,0:02:51.94,op-eng,,0000,0000,0000,,(MUSIC) Ĉu ĉi tio estas la fino de nia rakonto?Mi volas, ke vi vidu mian rideton
+Dialogue: 0,0:02:59.15,0:03:02.68,title,,0000,0000,0000,,{\alphaff\t(700,1443,0.8,\alpha00)}{\shad0\fs60\fnAngeleobardo\c&H4ED67F&\bord0.15\be1\frz3.325\pos(750,595.5)} (MUSIC) Ne ekzistas maniero, ke mi povus ami mian fratinon
 Dialogue: 0,0:03:05.97,0:03:07.91,main,,0000,0000,0000,,Bone, jen la via.
 Dialogue: 0,0:03:09.12,0:03:10.41,main,,0000,0000,0000,,Kie estas Kirino?
 Dialogue: 0,0:03:10.94,0:03:12.79,main,,0000,0000,0000,,Ŝi jam foriris.

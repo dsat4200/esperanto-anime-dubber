@@ -184,3 +184,62 @@ def fit_audio_to_duration(
         "postprocess": "atempo",
         "final_duration": final_dur,
     }
+
+
+def trim_silence(wav, sr: int, top_db: float = 30):
+    import librosa
+    trimmed, _ = librosa.effects.trim(wav, top_db=top_db)
+    if trimmed.size == 0:
+        return wav
+    return trimmed
+
+
+def extract_video_clip(
+    mkv_path: Path,
+    start_sec: float,
+    end_sec: float,
+    out_path: Path,
+    video_stream_index: int = 0,
+) -> Path:
+    mkv_path = Path(mkv_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path = _ffmpeg_bin()
+    dur = end_sec - start_sec
+    cmd = [
+        bin_path, "-y", "-loglevel", "error",
+        "-ss", f"{start_sec:.3f}",
+        "-t", f"{dur:.3f}",
+        "-i", str(mkv_path),
+        "-map", f"0:v:{video_stream_index}",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "18",
+        "-an",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True)
+    return out_path
+
+
+def extract_audio_slice(
+    source_path: Path,
+    start_sec: float,
+    end_sec: float,
+    out_path: Path,
+) -> Path:
+    source_path = Path(source_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path = _ffmpeg_bin()
+    dur = end_sec - start_sec
+    cmd = [
+        bin_path, "-y", "-loglevel", "error",
+        "-ss", f"{start_sec:.3f}",
+        "-t", f"{dur:.3f}",
+        "-i", str(source_path),
+        "-c", "copy",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True)
+    return out_path

@@ -1,8 +1,16 @@
 ﻿import argparse
 import json
+import sys
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import IntPrompt
@@ -11,21 +19,22 @@ from rich.table import Table
 from anidub.ass import (
     detect_language,
     filter_main_dialogue,
+    get_ass_header,
     parse_ass,
     strip_override_tags,
 )
-from anidub.config import DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT, get_ffmpeg_location
+from anidub.assembler import assemble_line, ensure_demucs_cache
+from anidub.config import DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT, get_ffmpeg_location, today_output_dir
 from anidub.esperanto import build_instruct_prompt
-from anidub.extract import extract_ref_clip_forward
+from anidub.extract import extract_ref_clip_forward, trim_silence
 
 console = Console()
 
-ENGINE_OMNIVOICE = "omnivoice"
-ENGINE_QWEN3 = "qwen3"
 SAFETY_MARGIN_SEC = 0.1
 MIN_PREROLL_SEC = 1.0
 REF_CLIP_DUR = 3.0
 MIN_TRANSCRIPTION_CHARS = 5
+SILENCE_TOP_DB = 30
 
 
 def fmt_ts(sec: float) -> str:
@@ -46,6 +55,9 @@ def split_lines(events):
         if lang == "japanese":
             skipped.append({**e, "reason": f"japanese: {clean[:60]}", "clean_text": clean})
             continue
+        if "(music)" in clean.lower():
+            skipped.append({**e, "reason": "music_marker", "clean_text": clean})
+            continue
         if e["start_sec"] < MIN_PREROLL_SEC:
             skipped.append({**e, "reason": "no_preroll_ref", "clean_text": clean})
             continue
@@ -61,7 +73,6 @@ def show_picker(usable):
     table.add_column("Idx", style="bold cyan", justify="right")
     table.add_column("Window")
     table.add_column("Dur", justify="right")
-    table.add_column("Speaker", style="magenta")
     table.add_column("Text")
     for e in usable[:40]:
         window = f"{fmt_ts(e['start_sec'])} -> {fmt_ts(e['end_sec'])}"
@@ -70,7 +81,6 @@ def show_picker(usable):
             str(e["index"]),
             window,
             f"{dur:.2f}s",
-            e["name"] or "-",
             e["clean_text"][:70],
         )
     console.print(table)
@@ -98,45 +108,32 @@ def save_skipped(skipped, out_path: Path):
         )
 
 
-def append_skipped(skipped_path: Path, entry: dict):
-    existing = []
-    if skipped_path.exists():
-        try:
-            with skipped_path.open("r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
-    existing.append(entry)
-    skipped_path.parent.mkdir(parents=True, exist_ok=True)
-    with skipped_path.open("w", encoding="utf-8") as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False)
-
-
-def print_params_block(result, engine_label):
-    d = result["diagnostics"]
-    panel = Panel.fit(
-        f"[bold]engine:[/] {engine_label}\n"
-        f"[bold]model_id:[/] {d['model_id']}\n"
-        f"[bold]device:[/] {d['device']}    [bold]dtype:[/] {d['dtype']}    "
-        f"[bold]attn:[/] {d['attn_impl']}\n"
-        f"[bold]target_duration:[/] {d['target_duration']}s\n"
-        f"[bold]params:[/]\n"
-        + json.dumps(d["params"], indent=2, ensure_ascii=False),
-        title="[bold blue]PARAMS[/]",
-        border_style="blue",
-    )
-    console.print(panel)
-
-
 def print_ref_transcription_block(ref_transcription: dict):
+    text = ref_transcription.get("text", "") or "(empty)"
     panel = Panel.fit(
         f"[bold]whisper model:[/] {ref_transcription['model']}\n"
         f"[bold]language:[/] {ref_transcription['language']}\n"
         f"[bold]audio duration:[/] {ref_transcription['audio_duration_sec']}s\n"
         f"[bold]inference:[/] {ref_transcription['inference_ms']} ms\n"
-        f"[bold]transcript:[/] {ref_transcription['text'] or '(empty)'}",
+        f"[bold]transcript:[/] {text}",
         title="[bold yellow]REF TRANSCRIPTION[/]",
         border_style="yellow",
+    )
+    console.print(panel)
+
+
+def print_params_block(result, whisper_model: str):
+    d = result["diagnostics"]
+    panel = Panel.fit(
+        f"[bold]model_id:[/] {d['model_id']}\n"
+        f"[bold]device:[/] {d['device']}    [bold]dtype:[/] {d['dtype']}    "
+        f"[bold]attn:[/] {d['attn_impl']}\n"
+        f"[bold]whisper:[/] {whisper_model}\n"
+        f"[bold]target_duration:[/] {d['target_duration']}s\n"
+        f"[bold]params:[/]\n"
+        + json.dumps(d["params"], indent=2, ensure_ascii=False),
+        title="[bold blue]PARAMS[/]",
+        border_style="blue",
     )
     console.print(panel)
 
@@ -168,20 +165,18 @@ def print_running_block(mem_before_mb: float):
     console.print(panel)
 
 
-def print_result_block(result, out_file: Path, slack_ms: float):
-    d = result["diagnostics"]
-    out_dur = result["output_duration"]
+def print_result_block(stats: dict, out_file: Path, slack_ms: float):
+    out_dur = stats["effective_dur"]
     slack_str = f"{slack_ms:+.1f} ms"
     verdict = "FITS" if slack_ms >= 0 else "OVERSHOOT"
-    pp = d.get("postprocess", {})
-    pp_chain = pp.get("atempo_chain", "none") if isinstance(pp, dict) else str(pp)
     panel = Panel.fit(
         f"[bold]out_file:[/] {out_file}\n"
-        f"[bold]output_duration:[/] {out_dur:.3f}s\n"
+        f"[bold]raw_duration:[/] {stats['raw_dur']:.3f}s\n"
+        f"[bold]effective_duration:[/] {out_dur:.3f}s\n"
         f"[bold]slack vs target:[/] {slack_str}\n"
-        f"[bold]atempo chain:[/] {pp_chain}\n"
-        f"[bold]inference_ms:[/] {d.get('inference_ms', '?')}\n"
-        f"[bold]cuda mem after:[/] {d.get('cuda_mem_after_mb', '?')} MB\n"
+        f"[bold]atempo:[/] {stats.get('atempo', 'none')}\n"
+        f"[bold]inference_ms:[/] {stats.get('inference_ms', '?')}\n"
+        f"[bold]cuda mem after:[/] {stats.get('cuda_mem_after_mb', '?')} MB\n"
         f"[bold]verdict:[/] [bold {'green' if slack_ms >= 0 else 'red'}]{verdict}[/]",
         title="[bold green]RESULT[/]",
         border_style="green",
@@ -189,72 +184,13 @@ def print_result_block(result, out_file: Path, slack_ms: float):
     console.print(panel)
 
 
-def run_engine(
-    engine_name, mkv, line, instruct, target_dur,
-    qwen_variant, qwen_speaker, whisper_model,
-):
-    console.rule(f"[bold cyan]{engine_name}[/]")
-
-    ref_wav = TEST_OUTPUT / f"ref_{line['index']}.wav"
-    extract_ref_clip_forward(
-        mkv, line, max_dur=REF_CLIP_DUR, out_path=ref_wav
-    )
-    console.print(f"[dim]Extracted ref clip -> {ref_wav}[/]")
-
-    if engine_name == ENGINE_OMNIVOICE:
-        from anidub.tts.omnivoice import OmniVoiceTTSBackend
-        backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
-    else:
-        from anidub.tts.qwen3 import Qwen3TTSBackend
-        backend = Qwen3TTSBackend(variant=qwen_variant, speaker=qwen_speaker)
-
-    result = backend.generate(
-        text=line["clean_text"],
-        ref_audio=ref_wav,
-        target_duration=target_dur,
-        instruct=instruct,
-    )
-
-    ref_transcription = result["diagnostics"].get("ref_transcription")
-    if engine_name == ENGINE_OMNIVOICE and ref_transcription:
-        print_ref_transcription_block(ref_transcription)
-        if len(ref_transcription.get("text", "").strip()) < MIN_TRANSCRIPTION_CHARS:
-            raise RuntimeError(
-                f"ref transcription empty or too short "
-                f"({len(ref_transcription['text'].strip())} chars); "
-                f"ref clip may be silent/SFX"
-            )
-
-    print_params_block(result, engine_name)
-    print_prompt_block(result, ref_wav)
-    mem_b = result["diagnostics"].get("cuda_mem_before_mb", 0.0)
-    print_running_block(mem_b)
-
-    out_file = TEST_OUTPUT / f"line_{line['index']}_{engine_name}.wav"
-    sf.write(out_file, result["wav"], result["sr"])
-    slack_ms = (target_dur - result["output_duration"]) * 1000.0
-    print_result_block(result, out_file, slack_ms)
-    return result, out_file, slack_ms
-
-
 def main():
     ap = argparse.ArgumentParser(
         prog="anidub-test-voice",
-        description="Voice one subtitle line with TTS (full logging)",
+        description="Voice one subtitle line with OmniVoice (full logging + assembly)",
     )
     ap.add_argument("--mkv", type=Path, default=DEFAULT_MKV)
     ap.add_argument("--ass", type=Path, default=DEFAULT_ASS)
-    ap.add_argument(
-        "--engine",
-        choices=[ENGINE_OMNIVOICE, ENGINE_QWEN3, "both"],
-        default=ENGINE_OMNIVOICE,
-    )
-    ap.add_argument(
-        "--qwen-variant",
-        choices=["custom", "base", "design"],
-        default="custom",
-    )
-    ap.add_argument("--qwen-speaker", default="Serena")
     ap.add_argument(
         "--whisper-model",
         default="openai/whisper-tiny",
@@ -265,7 +201,7 @@ def main():
             "openai/whisper-medium",
             "openai/whisper-large-v3-turbo",
         ],
-        help="Whisper model for ref-audio pre-transcription (OmniVoice only)",
+        help="Whisper model for ref-audio pre-transcription",
     )
     ap.add_argument("--line", type=int, default=None, help="skip picker, use index")
     args = ap.parse_args()
@@ -274,11 +210,15 @@ def main():
         console.print("[red]ffmpeg not found. Run .\\install.ps1[/]")
         return 1
 
+    run_dir = today_output_dir()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     console.print(
         Panel.fit(
             "[bold cyan]anidub-test-voice[/] - anime dubbing test\n"
             f"[dim]mkv: {args.mkv}\nass: {args.ass}\n"
-            f"engine: {args.engine}\nwhisper: {args.whisper_model}[/]",
+            f"whisper: {args.whisper_model}\n"
+            f"output: {run_dir}[/]",
             border_style="cyan",
         )
     )
@@ -286,6 +226,12 @@ def main():
     if not args.mkv.exists() or not args.ass.exists():
         console.print(f"[red]Missing mkv/ass: {args.mkv} / {args.ass}[/]")
         return 1
+
+    ass_header = get_ass_header(args.ass)
+
+    console.print("[bold]Checking Demucs cache...[/]")
+    full_no_vocals, full_vocals = ensure_demucs_cache(args.mkv, run_dir)
+    console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
     events = parse_ass(args.ass)
     main_events = filter_main_dialogue(events)
@@ -295,10 +241,11 @@ def main():
     )
 
     usable, skipped = split_lines(main_events)
-    save_skipped(skipped, TEST_OUTPUT / "skipped.json")
+    skipped_path = run_dir / "skipped.json"
+    save_skipped(skipped, skipped_path)
     console.print(
         f"[dim]{len(usable)} usable, {len(skipped)} skipped "
-        f"(-> {TEST_OUTPUT / 'skipped.json'})[/]"
+        f"(-> {skipped_path})[/]"
     )
 
     if not usable:
@@ -337,67 +284,146 @@ def main():
     instruct = build_instruct_prompt(line.get("name") or None)
     target_dur = (line["end_sec"] - line["start_sec"]) - SAFETY_MARGIN_SEC
 
-    engines = [ENGINE_OMNIVOICE]
-    if args.engine == ENGINE_QWEN3:
-        engines = [ENGINE_QWEN3]
-    elif args.engine == "both":
-        engines = [ENGINE_OMNIVOICE, ENGINE_QWEN3]
+    out_dir = run_dir / f"line_{line['index']:03d}"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = []
-    log: dict = {
-        "line": {
-            "index": line["index"],
-            "start_sec": line["start_sec"],
-            "end_sec": line["end_sec"],
-            "speaker": line.get("name") or None,
-            "text": line["clean_text"],
-        },
-        "target_duration": target_dur,
-        "instruct": instruct,
-        "engines": {},
-    }
+    try:
+        console.rule("[bold cyan]OmniVoice[/]")
 
-    for eng in engines:
-        try:
-            result, out_file, slack_ms = run_engine(
-                eng, args.mkv, line, instruct, target_dur,
-                args.qwen_variant, args.qwen_speaker, args.whisper_model,
+        ref_wav = out_dir / "ref.wav"
+        extract_ref_clip_forward(
+            args.mkv, line, max_dur=REF_CLIP_DUR, out_path=ref_wav
+        )
+        console.print(f"[dim]Extracted ref clip -> {ref_wav}[/]")
+
+        from anidub.tts.omnivoice import OmniVoiceTTSBackend
+        backend = OmniVoiceTTSBackend(whisper_model=args.whisper_model)
+
+        result = backend.generate(
+            text=line["clean_text"],
+            ref_audio=ref_wav,
+            target_duration=target_dur,
+            instruct=instruct,
+        )
+
+        ref_transcription = result["diagnostics"].get("ref_transcription")
+        if ref_transcription:
+            print_ref_transcription_block(ref_transcription)
+            transcript_text = ref_transcription.get("text", "").strip()
+            if len(transcript_text) < MIN_TRANSCRIPTION_CHARS:
+                console.print(
+                    f"[yellow]Ref transcription too short "
+                    f"({len(transcript_text)} chars). "
+                    f"Skipping (possible silent/noise ref clip).[/]"
+                )
+                return 1
+
+        print_params_block(result, args.whisper_model)
+        print_prompt_block(result, ref_wav)
+
+        mem_b = result["diagnostics"].get("cuda_mem_before_mb", 0.0)
+        print_running_block(mem_b)
+
+        raw_dur = result["output_duration"]
+        raw_wav = result["wav"]
+        sr = result["sr"]
+
+        tts_raw = out_dir / "tts_raw.wav"
+        sf.write(tts_raw, raw_wav, sr)
+        console.print(f"[dim]Saved raw TTS -> {tts_raw}[/]")
+
+        trimmed = trim_silence(raw_wav, sr, top_db=SILENCE_TOP_DB)
+        effective_dur = len(trimmed) / sr
+
+        atempo_info = "none"
+        if effective_dur > target_dur:
+            console.print(
+                f"[yellow]Effective voice duration {effective_dur:.3f}s > "
+                f"target {target_dur:.3f}s. Applying atempo...[/]"
             )
-            log["engines"][eng] = result["diagnostics"]
-            summary.append((eng, result, out_file, slack_ms))
-        except Exception as e:
-            console.print(f"[red]{eng} failed: {e}[/]")
-            import traceback
-            console.print(f"[dim]{traceback.format_exc()}[/]")
-            log["engines"][eng] = {"error": str(e)}
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False, delete_on_close=False
+            ) as tmp_out:
+                tmp_path = Path(tmp_out.name)
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False, delete_on_close=False
+            ) as tmp_in:
+                tmp_input = Path(tmp_in.name)
+            try:
+                sf.write(tmp_input, trimmed, sr)
+                from anidub.extract import fit_audio_to_duration
+                fit_result = fit_audio_to_duration(tmp_input, tmp_path, target_dur)
+                atempo_info = fit_result.get("atempo_chain", "unknown")
+                fitted_wav, fitted_sr = sf.read(tmp_path)
+                trimmed = np.asarray(fitted_wav, dtype=np.float32).T
+                sr = fitted_sr
+                effective_dur = len(trimmed) / sr
+            finally:
+                tmp_input.unlink(missing_ok=True)
+                tmp_path.unlink(missing_ok=True)
+            console.print(f"[dim]atempo chain: {atempo_info}[/]")
 
-    if summary:
+        slack_ms = (target_dur - effective_dur) * 1000.0
+
+        tts_trimmed = out_dir / "tts.wav"
+        sf.write(tts_trimmed, trimmed, sr)
+
+        stats = {
+            "raw_dur": raw_dur,
+            "effective_dur": effective_dur,
+            "inference_ms": result["diagnostics"].get("inference_ms"),
+            "cuda_mem_after_mb": result["diagnostics"].get("cuda_mem_after_mb"),
+            "atempo": atempo_info,
+        }
+        print_result_block(stats, tts_trimmed, slack_ms)
+
+        console.rule("[bold]Assembly[/]")
+        assembly = assemble_line(
+            args.mkv, line, tts_trimmed, full_no_vocals,
+            ass_header, out_dir,
+        )
+        console.print(f"[green]final.mkv -> {assembly['final']}[/]")
+        console.print(f"[dim]dubbed.wav -> {assembly['dubbed']}[/]")
+
+        log: dict = {
+            "line": {
+                "index": line["index"],
+                "start_sec": line["start_sec"],
+                "end_sec": line["end_sec"],
+                "speaker": line.get("name") or None,
+                "text": line["clean_text"],
+            },
+            "target_duration": target_dur,
+            "instruct": instruct,
+            "stats": stats,
+            "diagnostics": result["diagnostics"],
+            "assembly": assembly,
+        }
+        log_path = out_dir / "log.json"
+        with log_path.open("w", encoding="utf-8") as f:
+            json.dump(log, f, indent=2, ensure_ascii=False, default=str)
+        console.print(f"\n[bold]Logs -> {log_path}[/]")
+
         table = Table(title="Summary", show_lines=True)
-        table.add_column("Engine", style="bold cyan")
-        table.add_column("Inference ms", justify="right")
-        table.add_column("Output ms", justify="right")
-        table.add_column("Slack vs target", justify="right")
-        table.add_column("Verdict")
-        table.add_column("File")
-        for eng, result, out_file, slack_ms in summary:
-            out_ms = result["output_duration"] * 1000.0
-            verdict = "FITS" if slack_ms >= 0 else "OVERSHOOT"
-            verdict_style = "green" if slack_ms >= 0 else "red"
-            table.add_row(
-                eng,
-                str(result["diagnostics"].get("inference_ms", "?")),
-                f"{out_ms:.0f}",
-                f"{slack_ms:+.0f}",
-                f"[{verdict_style}]{verdict}[/]",
-                str(out_file),
-            )
+        table.add_column("Metric", style="bold cyan")
+        table.add_column("Value", justify="right")
+        table.add_row("Inference", f"{stats['inference_ms']} ms")
+        table.add_row("Raw duration", f"{raw_dur:.3f}s")
+        table.add_row("Effective duration", f"{effective_dur:.3f}s")
+        table.add_row("Target duration", f"{target_dur:.3f}s")
+        table.add_row("Slack", f"{slack_ms:+.0f} ms")
+        verdict = "FITS" if slack_ms >= 0 else "OVERSHOOT"
+        table.add_row("Verdict", f"[{'green' if slack_ms >= 0 else 'red'}]{verdict}[/]")
+        table.add_row("Final mkv", str(assembly["final"]))
         console.print(table)
 
-    log_path = TEST_OUTPUT / f"line_{line['index']}.json"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        json.dump(log, f, indent=2, ensure_ascii=False, default=str)
-    console.print(f"\n[bold]Logs -> {log_path}[/]")
+    except Exception as e:
+        console.print(f"[red]Failed: {e}[/]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/]")
+        return 1
+
     return 0
 
 

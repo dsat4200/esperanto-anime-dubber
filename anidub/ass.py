@@ -90,6 +90,20 @@ def strip_override_tags(text: str) -> str:
     return text.strip()
 
 
+def get_ass_header(path: Path) -> str:
+    path = Path(path)
+    with path.open("r", encoding="utf-8-sig") as f:
+        header_lines = []
+        for line in f:
+            header_lines.append(line.rstrip("\r\n"))
+            if line.strip() == "[Events]":
+                break
+        next_line = f.readline()
+        if next_line.strip().startswith("Format:"):
+            header_lines.append(next_line.rstrip("\r\n"))
+    return "\n".join(header_lines)
+
+
 def detect_language(text: str) -> Literal["esperanto", "japanese", "unknown"]:
     if _CJK_RE.search(text):
         return "japanese"

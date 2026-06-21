@@ -116,10 +116,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host ""
-Write-Host "NOTE: qwen-tts is NOT installed (conflicts with omnivoice's transformers>=5.3)." -ForegroundColor DarkGray
-Write-Host "      To use --engine qwen3, set up a separate venv: pip install qwen-tts" -ForegroundColor DarkGray
-Write-Host ""
+
 
 Write-Host "Installing anidub (project)..." -ForegroundColor Yellow
 & pip install -e .
