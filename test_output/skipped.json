@@ -1,0 +1,47 @@
+[
+  {
+    "index": 0,
+    "start_sec": 26.12,
+    "end_sec": 27.04,
+    "style": "main",
+    "name": "",
+    "original_text": "Onii-chan!",
+    "reason": "japanese: Onii-chan!"
+  },
+  {
+    "index": 11,
+    "start_sec": 70.83,
+    "end_sec": 71.8,
+    "style": "main",
+    "name": "",
+    "original_text": "Onii-chan?",
+    "reason": "japanese: Onii-chan?"
+  },
+  {
+    "index": 326,
+    "start_sec": 1129.45,
+    "end_sec": 1135.77,
+    "style": "main",
+    "name": "",
+    "original_text": "Kiel en ĉi tiuj galge, ili nomas vin \"Onii-chan\" aŭ \"Aniki\" aŭ \"Nii-nii\" aŭ \"Nii-chama\"!",
+    "reason": "japanese: Kiel en ĉi tiuj galge, ili nomas vin \"Onii-chan\" aŭ \"Aniki\" "
+  },
+  {
+    "index": 411,
+    "start_sec": 1393.61,
+    "end_sec": 1396.54,
+    "style": "main",
+    "name": "",
+    "original_text": "Mi-mi bedaŭras!Mi bedaŭras Onii-chan!",
+    "reason": "japanese: Mi-mi bedaŭras!Mi bedaŭras Onii-chan!"
+  },
+  {
+    "index": 461,
+    "start_sec": 1531.48,
+    "end_sec": 1532.87,
+    "style": "main",
+    "name": "",
+    "original_text": "Onii-chan!",
+    "reason": "japanese: Onii-chan!"
+  }
+]

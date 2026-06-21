@@ -1,0 +1,43 @@
+{
+  "line": {
+    "index": 6,
+    "start_sec": 48.61,
+    "end_sec": 50.55,
+    "speaker": null,
+    "text": "Vi estas falsaĵo."
+  },
+  "target_duration": 1.8399999999999976,
+  "instruct": "Speak with perfect Esperanto phonetics, natural rhythm and clear diction:\nSpeak the following Esperanto text with perfect, natural Esperanto pronunciation, smooth word links, and correct phonetics: \n[\n  {\n    char: \"Ĉ / ĉ\",\n    name: \"ĉo\",\n    pronunciation: \"ch\",\n    exampleWord: \"Ĉokolado\",\n    exampleMeaning: \"Chocolate\",\n    pronundescription: \"Sounds like 'ch' in 'chair' or 'church'.\"\n  },\n  {\n    char: \"Ĝ / ĝ\",\n    name: \"ĝo\",\n    pronunciation: \"j\",\n    exampleWord: \"Ĝardeno\",\n    exampleMeaning: \"Garden\",\n    pronundescription: \"Sounds like 'j' in 'joy' or 'gem'.\"\n  },\n  {\n    char: \"Ĥ / ĥ\",\n    name: \"ĥo\",\n    pronunciation: \"kh\",\n    exampleWord: \"Ĥoruso\",\n    exampleMeaning: \"Chorus / Choir\",\n    pronundescription: \"A raspy, German 'ch' or Scottish 'ch' in 'loch'.\"\n  },\n  {\n    char: \"Ĵ / ĵ\",\n    name: \"ĵo\",\n    pronunciation: \"zh\",\n    exampleWord: \"Ĵurnalo\",\n    exampleMeaning: \"Newspaper\",\n    pronundescription: \"Sounds like 's' in 'measure' or 'g' in 'garage'.\"\n  },\n  {\n    char: \"Ŝ / ŝ\",\n    name: \"ŝo\",\n    pronunciation: \"sh\",\n    exampleWord: \"Ŝuo\",\n    exampleMeaning: \"Shoe\",\n    pronundescription: \"Sounds like 'sh' in 'show' or 'shine'.\"\n  },\n  {\n    char: \"Ŭ / ŭ\",\n    name: \"ŭo\",\n    pronunciation: \"w\",\n    exampleWord: \"Antaŭ\",\n    exampleMeaning: \"Before / Front\",\n    pronundescription: \"Sounds like 'w' in 'cow' or 'now'. Used as a semi-vowel.\"\n  }\n]",
+  "engines": {
+    "omnivoice": {
+      "model_id": "k2-fsa/OmniVoice",
+      "device": "cuda:0",
+      "dtype": "torch.float16",
+      "attn_impl": "sdpa",
+      "params": {
+        "text": "Vi estas falsaĵo.",
+        "ref_audio": "C:\\Users\\hopper\\Documents\\GitHub\\omnivoice fuckery\\test_output\\ref_6.wav",
+        "ref_text": "お前にせものだろう",
+        "language_id": "eo",
+        "duration": 1.8399999999999976,
+        "num_step": 32,
+        "postprocess_output": false
+      },
+      "prompt_text": "Speak with perfect Esperanto phonetics, natural rhythm and clear diction:\nSpeak the following Esperanto text with perfect, natural Esperanto pronunciation, smooth word links, and correct phonetics: \n[\n  {\n    char: \"Ĉ / ĉ\",\n    name: \"ĉo\",\n    pronunciation: \"ch\",\n    exampleWord: \"Ĉokolado\",\n    exampleMeaning: \"Chocolate\",\n    pronundescription: \"Sounds like 'ch' in 'chair' or 'church'.\"\n  },\n  {\n    char: \"Ĝ / ĝ\",\n    name: \"ĝo\",\n    pronunciation: \"j\",\n    exampleWord: \"Ĝardeno\",\n    exampleMeaning: \"Garden\",\n    pronundescription: \"Sounds like 'j' in 'joy' or 'gem'.\"\n  },\n  {\n    char: \"Ĥ / ĥ\",\n    name: \"ĥo\",\n    pronunciation: \"kh\",\n    exampleWord: \"Ĥoruso\",\n    exampleMeaning: \"Chorus / Choir\",\n    pronundescription: \"A raspy, German 'ch' or Scottish 'ch' in 'loch'.\"\n  },\n  {\n    char: \"Ĵ / ĵ\",\n    name: \"ĵo\",\n    pronunciation: \"zh\",\n    exampleWord: \"Ĵurnalo\",\n    exampleMeaning: \"Newspaper\",\n    pronundescription: \"Sounds like 's' in 'measure' or 'g' in 'garage'.\"\n  },\n  {\n    char: \"Ŝ / ŝ\",\n    name: \"ŝo\",\n    pronunciation: \"sh\",\n    exampleWord: \"Ŝuo\",\n    exampleMeaning: \"Shoe\",\n    pronundescription: \"Sounds like 'sh' in 'show' or 'shine'.\"\n  },\n  {\n    char: \"Ŭ / ŭ\",\n    name: \"ŭo\",\n    pronunciation: \"w\",\n    exampleWord: \"Antaŭ\",\n    exampleMeaning: \"Before / Front\",\n    pronundescription: \"Sounds like 'w' in 'cow' or 'now'. Used as a semi-vowel.\"\n  }\n]",
+      "prompt_chars": 1395,
+      "target_duration": 1.8399999999999976,
+      "ref_transcription": {
+        "text": "お前にせものだろう",
+        "model": "openai/whisper-tiny",
+        "language": "japanese",
+        "inference_ms": 914.7,
+        "audio_duration_sec": 2.92
+      },
+      "cuda_mem_before_mb": 2018.4,
+      "inference_ms": 1425.4,
+      "cuda_mem_after_mb": 2018.4,
+      "output_duration": 2.0,
+      "postprocess": "none (native duration control)"
+    }
+  }
+}

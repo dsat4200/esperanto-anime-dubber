@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+downloads/
+ffmpeg/
+*.egg-info/
+build/
+dist/
+anime/oreimo/Oreimo - 01.mkv
