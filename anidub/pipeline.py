@@ -109,8 +109,8 @@ def process_line(
 
 
 def get_op_ed_ranges(events: list) -> tuple[float, float, float, float]:
-    op_events = [e for e in events if e["style"] in ("op-rom", "op-eng")]
-    ed_events = [e for e in events if e["style"] in ("ed-rom", "ed-eng")]
+    op_events = [e for e in events if "op" in e["style"].lower()]
+    ed_events = [e for e in events if "ed" in e["style"].lower()]
 
     intro_start = float("inf")
     intro_end = 0.0

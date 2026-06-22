@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 [project.scripts]
 anidub = "anidub.cli:main"
 anidub-test-voice = "anidub.test_voice:main"
+anidub-translate = "anidub.translate:main"
 
 [tool.setuptools.packages.find]
 include = ["anidub*"]

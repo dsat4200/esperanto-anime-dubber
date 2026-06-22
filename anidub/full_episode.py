@@ -44,6 +44,8 @@ def build_full_episode(
     full_no_vocals: Path,
     full_original_audio: Path,
     voiced_results: list[dict],
+    ass_path: Path,
+    errors: list[dict] | None = None,
 ) -> Path:
     batch_out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,7 +102,7 @@ def build_full_episode(
         nv, ((0, total_samples - nv.shape[0]), (0, 0)), mode="constant",
     )[:total_samples]
 
-    output[:intro_start] = nv[:intro_start].copy()
+    output[:intro_start] = nv[:intro_start].copy() + voice_stereo[:intro_start]
 
     if intro_end > intro_start:
         src_slice = orig[intro_start:intro_end]
@@ -118,7 +120,16 @@ def build_full_episode(
         output[outro_start:outro_end] = src_slice.astype(np.float32)
 
     if outro_end < total_samples:
-        output[outro_end:] = nv[outro_end:total_samples].copy()
+        output[outro_end:] = nv[outro_end:total_samples].copy() + voice_stereo[outro_end:]
+
+    if errors:
+        for err in errors:
+            es = int(err["start_sec"] * _TARGET_SR)
+            ee = int(err["end_sec"] * _TARGET_SR)
+            es = min(es, total_samples)
+            ee = min(ee, total_samples)
+            if ee > es:
+                output[es:ee] = orig[es:ee].astype(np.float32)
 
     output *= _GLOBAL_VOLUME
     output = np.clip(output, -1.0, 1.0)
@@ -126,13 +137,14 @@ def build_full_episode(
     dubbed_wav = batch_out_dir / "full_dubbed.wav"
     sf.write(str(dubbed_wav), output, _TARGET_SR)
 
-    final_mkv = batch_out_dir / "Oreimo_Ep01_Dubbed.mkv"
+    ep_name = mkv_path.stem.replace(".mkv", "")
+    final_mkv = batch_out_dir / f"{ep_name}_Dubbed.mkv"
     bin_path = _ffmpeg_bin()
     subprocess.run([
         bin_path, "-y", "-loglevel", "error",
         "-i", str(mkv_path),
         "-i", str(dubbed_wav),
-        "-i", str(Path(mkv_path).parent / "Oreimo - 01.ass"),
+        "-i", str(ass_path),
         "-map", "0:v:0",
         "-map", "1:a",
         "-map", "0:a:0",

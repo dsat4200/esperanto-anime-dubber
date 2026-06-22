@@ -25,15 +25,16 @@ import soundfile as sf
 
 from anidub.ass import (
     detect_language,
-    filter_main_dialogue,
+    filter_dialogue,
     get_ass_header,
     parse_ass,
     strip_override_tags,
 )
 from anidub.assembler import ensure_demucs_cache
 from anidub.config import (
-    DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT,
-    get_ffmpeg_location, today_output_dir, today_batch_dir,
+    DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT, ANIME_ROOT,
+    get_ffmpeg_location, today_output_dir, today_batch_dir, anime_batch_dir, anime_test_dir,
+    discover_anime, auto_detect_ass,
 )
 from anidub.extract import extract_ref_clip_forward, trim_silence, extract_full_audio_resampled
 from anidub.pipeline import (
@@ -42,6 +43,7 @@ from anidub.pipeline import (
     is_in_range,
     make_line_dir_name,
 )
+from anidub.translate import extract_embedded_ass, translate_ass_to_esperanto
 
 console = Console()
 
@@ -101,6 +103,16 @@ def show_picker(usable):
     console.print(table)
 
 
+def show_anime_picker(anime_list):
+    table = Table(title="Pick an anime", show_lines=True)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Name")
+    table.add_column("MKV")
+    for i, a in enumerate(anime_list):
+        table.add_row(str(i + 1), a["name"], a["mkv"].name)
+    console.print(table)
+
+
 def save_skipped(skipped, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
@@ -121,6 +133,32 @@ def save_skipped(skipped, out_path: Path):
             indent=2,
             ensure_ascii=False,
         )
+
+
+def resolve_anime(args) -> tuple[Path, Path | None, str]:
+    if args.mkv:
+        return args.mkv, args.ass, ""
+
+    if args.anime:
+        anime_list = discover_anime(ANIME_ROOT)
+        match = [a for a in anime_list if a["name"] == args.anime]
+        if not match:
+            raise SystemExit(f"Anime '{args.anime}' not found in {ANIME_ROOT}/")
+        return match[0]["mkv"], None, match[0]["name"]
+
+    anime_list = discover_anime(ANIME_ROOT)
+    if not anime_list:
+        raise SystemExit(f"No anime found in {ANIME_ROOT}/")
+
+    if len(anime_list) == 1:
+        console.print(f"[dim]Auto-selected: {anime_list[0]['name']}[/]")
+        return anime_list[0]["mkv"], None, anime_list[0]["name"]
+
+    show_anime_picker(anime_list)
+    idx = IntPrompt.ask("[bold]Pick anime[/]", default=1) - 1
+    if idx < 0 or idx >= len(anime_list):
+        raise SystemExit("Invalid choice")
+    return anime_list[idx]["mkv"], None, anime_list[idx]["name"]
 
 
 def print_ref_transcription_block(ref_transcription: dict):
@@ -200,31 +238,34 @@ def print_result_block(stats: dict, out_file: Path, slack_ms: float):
 
 
 def run_single_line(args):
-    run_dir = today_output_dir()
+    mkv_path, ass_path, anime_name = resolve_anime(args)
+    if ass_path is None:
+        ass_path = auto_detect_ass(mkv_path)
+    if ass_path is None:
+        console.print("[red]No ASS file found. Use --translate to extract/translate from MKV.[/]")
+        return 1
+
+    run_dir = anime_test_dir(anime_name) if anime_name else today_output_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
         Panel.fit(
             "[bold cyan]anidub-test-voice[/] - anime dubbing test\n"
-            f"[dim]mkv: {args.mkv}\nass: {args.ass}\n"
+            f"[dim]mkv: {mkv_path}\nass: {ass_path}\n"
             f"whisper: {args.whisper_model}\n"
             f"output: {run_dir}[/]",
             border_style="cyan",
         )
     )
 
-    if not args.mkv.exists() or not args.ass.exists():
-        console.print(f"[red]Missing mkv/ass: {args.mkv} / {args.ass}[/]")
-        return 1
-
-    ass_header = get_ass_header(args.ass)
+    ass_header = get_ass_header(ass_path)
 
     console.print("[bold]Checking Demucs cache...[/]")
-    full_no_vocals, full_vocals = ensure_demucs_cache(args.mkv, run_dir)
+    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, run_dir)
     console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
-    events = parse_ass(args.ass)
-    main_events = filter_main_dialogue(events)
+    events = parse_ass(ass_path)
+    main_events = filter_dialogue(events)
     console.print(
         f"[dim]Parsed {len(events)} events, "
         f"{len(main_events)} `main` dialogue.[/]"
@@ -279,7 +320,7 @@ def run_single_line(args):
         backend = OmniVoiceTTSBackend(whisper_model=args.whisper_model)
 
         result = process_line(
-            args.mkv, line, args.whisper_model, out_dir,
+            mkv_path, line, args.whisper_model, out_dir,
             backend, full_no_vocals, ass_header,
         )
 
@@ -346,37 +387,58 @@ def run_single_line(args):
 
 
 def run_batch(args):
-    batch_dir = today_batch_dir()
+    mkv_path, ass_path, anime_name = resolve_anime(args)
+    if ass_path is None:
+        ass_path = auto_detect_ass(mkv_path)
+
+    if args.translate or ass_path is None:
+        if ass_path is None or not ass_path.exists():
+            src_ass = mkv_path.parent / f"{mkv_path.stem}_orig.ass"
+            console.print("[bold]Extracting embedded ASS...[/]")
+            extract_embedded_ass(mkv_path, src_ass)
+        else:
+            src_ass = ass_path
+        ass_path = mkv_path.parent / f"{mkv_path.stem}_eo.ass"
+        console.print(f"[bold]Translating to Esperanto...[/]")
+        result = translate_ass_to_esperanto(src_ass, ass_path, delay=1.0)
+        console.print(f"  {result['translated']}/{result['total']} lines, "
+                      f"{result['failed']} failed, {result['elapsed_sec']:.0f}s")
+        console.print(f"  -> {ass_path}")
+        if not args.batch:
+            console.print("[green]Translation complete. Review the .ass, then run --batch.[/]")
+            return 0
+
+    if not ass_path or not ass_path.exists():
+        console.print("[red]No ASS file found.[/]")
+        return 1
+
+    batch_dir = anime_batch_dir(anime_name) if anime_name else today_batch_dir()
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
         Panel.fit(
             "[bold cyan]anidub-test-voice --batch[/]\n"
-            f"[dim]mkv: {args.mkv}\nass: {args.ass}\n"
+            f"[dim]mkv: {mkv_path}\nass: {ass_path}\n"
             f"whisper: {args.whisper_model}\n"
             f"output: {batch_dir}[/]",
             border_style="cyan",
         )
     )
 
-    if not args.mkv.exists() or not args.ass.exists():
-        console.print(f"[red]Missing mkv/ass: {args.mkv} / {args.ass}[/]")
-        return 1
-
-    ass_header = get_ass_header(args.ass)
+    ass_header = get_ass_header(ass_path)
 
     console.print("[bold]Checking Demucs cache...[/]")
-    full_no_vocals, full_vocals = ensure_demucs_cache(args.mkv, batch_dir)
+    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, batch_dir)
     console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
     full_original_audio = batch_dir / "full_original_audio.wav"
     if not full_original_audio.exists():
         console.print("[bold]Extracting original audio...[/]")
-        extract_full_audio_resampled(args.mkv, full_original_audio, target_sr=44100)
+        extract_full_audio_resampled(mkv_path, full_original_audio, target_sr=44100)
         console.print(f"[dim]  original: {full_original_audio}[/]")
 
-    events = parse_ass(args.ass)
-    main_events = filter_main_dialogue(events)
+    events = parse_ass(ass_path)
+    main_events = filter_dialogue(events)
     console.print(
         f"[dim]Parsed {len(events)} events, "
         f"{len(main_events)} `main` dialogue.[/]"
@@ -397,16 +459,12 @@ def run_batch(args):
     )
 
     body_lines = []
-    max_voice_count = 0
     for line in usable:
         in_op = is_in_range(line["start_sec"], line["end_sec"], intro_start, intro_end)
         in_ed = is_in_range(line["start_sec"], line["end_sec"], outro_start, outro_end)
         if in_op or in_ed:
             continue
         body_lines.append(line)
-        idx = int(line["index"])
-        if idx > max_voice_count:
-            pass
     console.print(
         f"[dim]{len(body_lines)} body lines to voice "
         f"({len(usable) - len(body_lines)} skipped - in OP/ED range)[/]"
@@ -460,7 +518,7 @@ def run_batch(args):
 
             try:
                 result = process_line(
-                    args.mkv, line, args.whisper_model, line_dir,
+                    mkv_path, line, args.whisper_model, line_dir,
                     tts_backend, full_no_vocals, ass_header,
                 )
                 voiced_results.append(result)
@@ -469,6 +527,7 @@ def run_batch(args):
                     "line_index": line["index"],
                     "text": line["clean_text"],
                     "start_sec": line["start_sec"],
+                    "end_sec": line["end_sec"],
                     "error": str(e),
                 })
             progress.update(overall, advance=1)
@@ -484,13 +543,12 @@ def run_batch(args):
 
     if voiced_results:
         console.print("[bold]Assembling full episode...[/]")
-        final_episode = batch_dir / "Oreimo_Ep01_Dubbed.mkv"
         try:
             from anidub.full_episode import build_full_episode
-            build_full_episode(
-                args.mkv, events, batch_dir,
+            final_episode = build_full_episode(
+                mkv_path, events, batch_dir,
                 full_no_vocals, full_original_audio,
-                voiced_results,
+                voiced_results, ass_path, errors=errors if errors else None,
             )
             console.print(f"[green]Full episode -> {final_episode}[/]")
         except Exception as e:
@@ -548,8 +606,9 @@ def main():
         prog="anidub-test-voice",
         description="Voice subtitle lines with OmniVoice",
     )
-    ap.add_argument("--mkv", type=Path, default=DEFAULT_MKV)
-    ap.add_argument("--ass", type=Path, default=DEFAULT_ASS)
+    ap.add_argument("--mkv", type=Path, default=None)
+    ap.add_argument("--ass", type=Path, default=None)
+    ap.add_argument("--anime", default=None, help="pick anime by folder name")
     ap.add_argument(
         "--whisper-model",
         default="openai/whisper-tiny",
@@ -564,6 +623,10 @@ def main():
     )
     ap.add_argument("--line", type=int, default=None, help="skip picker, use index")
     ap.add_argument("--batch", action="store_true", help="process all usable lines")
+    ap.add_argument(
+        "--translate", action="store_true",
+        help="extract/translate embedded ASS to Esperanto before voicing",
+    )
     args = ap.parse_args()
 
     if not get_ffmpeg_location():

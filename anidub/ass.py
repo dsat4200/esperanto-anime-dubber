@@ -80,8 +80,18 @@ def parse_ass(path: Path) -> list[AssEvent]:
     return events
 
 
+_NON_DIALOGUE_TOKENS = {"op", "ed", "sign", "title", "note"}
+
+
+def filter_dialogue(events: list[AssEvent]) -> list[AssEvent]:
+    return [
+        e for e in events
+        if not any(t in e["style"].lower() for t in _NON_DIALOGUE_TOKENS)
+    ]
+
+
 def filter_main_dialogue(events: list[AssEvent]) -> list[AssEvent]:
-    return [e for e in events if e["style"] == "main"]
+    return filter_dialogue(events)
 
 
 def strip_override_tags(text: str) -> str:

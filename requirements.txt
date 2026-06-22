@@ -1,9 +1,5 @@
-# Core dependencies for anidub. Install with: pip install -r requirements.txt
 demucs>=4.0.0
 omnivoice>=0.1.5
+deep-translator>=1.11.0
 rich>=13.0.0
 soundfile>=0.12.0
-# NOTE: qwen-tts is NOT installed by default because it pins transformers==4.57.3
-# while omnivoice>=0.1.5 needs transformers>=5.3.0. The two conflict.
-# To use --engine qwen3, install in a separate venv:
-#   pip install qwen-tts>=0.1.1
