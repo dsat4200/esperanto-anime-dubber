@@ -13,6 +13,30 @@ def _ffmpeg_bin():
     return str(Path(loc) / "ffmpeg.exe")
 
 
+def probe_audio_streams(mkv_path: Path) -> list[dict]:
+    bin_path = str(Path(_ffmpeg_bin()).parent / "ffprobe.exe")
+    out = subprocess.run([
+        bin_path, "-v", "error",
+        "-show_entries",
+        "stream=index,codec_type,codec_name,channels,sample_rate:stream_tags=language,title",
+        "-of", "json", str(mkv_path),
+    ], capture_output=True, text=True, check=True).stdout
+    info = json.loads(out)
+    streams = []
+    for s in info.get("streams", []):
+        if s.get("codec_type") == "audio":
+            tags = s.get("tags", {})
+            streams.append({
+                "index": s["index"],
+                "codec": s.get("codec_name", "?"),
+                "channels": s.get("channels", 0),
+                "sample_rate": s.get("sample_rate", 0),
+                "language": tags.get("language", ""),
+                "title": tags.get("title", ""),
+            })
+    return streams
+
+
 def _probe_sample_count(path: Path) -> tuple[int, int]:
     bin_path = _ffmpeg_bin()
     ffprobe = str(Path(bin_path).parent / "ffprobe.exe")

@@ -24,6 +24,7 @@ def process_line(
     tts_backend,
     full_no_vocals: Path,
     ass_header: str,
+    audio_stream_index: int = 0,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -31,7 +32,8 @@ def process_line(
     target_dur = (line["end_sec"] - line["start_sec"]) - SAFETY_MARGIN_SEC
 
     ref_wav = out_dir / "ref.wav"
-    extract_ref_clip_forward(mkv_path, line, max_dur=REF_CLIP_DUR, out_path=ref_wav)
+    extract_ref_clip_forward(mkv_path, line, max_dur=REF_CLIP_DUR, out_path=ref_wav,
+                             audio_stream_index=audio_stream_index)
 
     result = tts_backend.generate(
         text=line["clean_text"],

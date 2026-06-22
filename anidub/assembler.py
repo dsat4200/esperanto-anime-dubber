@@ -16,7 +16,7 @@ def _ffmpeg_bin():
     return str(Path(loc) / "ffmpeg.exe")
 
 
-def ensure_demucs_cache(mkv_path: Path, out_root: Path) -> tuple[Path, Path]:
+def ensure_demucs_cache(mkv_path: Path, out_root: Path, audio_stream_index: int = 0) -> tuple[Path, Path]:
     no_vocals_cache = out_root / "full_no_vocals.wav"
     vocals_cache = out_root / "full_vocals.wav"
 
@@ -25,7 +25,7 @@ def ensure_demucs_cache(mkv_path: Path, out_root: Path) -> tuple[Path, Path]:
 
     out_root.mkdir(parents=True, exist_ok=True)
     full_audio = out_root / "_full_audio.wav"
-    extract_full_audio(mkv_path, full_audio, audio_stream_index=0)
+    extract_full_audio(mkv_path, full_audio, audio_stream_index=audio_stream_index)
 
     from anidub.separator import separate_audio
     sep_dir = out_root / "_full_separated"

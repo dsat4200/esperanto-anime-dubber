@@ -122,6 +122,28 @@ def build_full_episode(
     if outro_end < total_samples:
         output[outro_end:] = nv[outro_end:total_samples].copy() + voice_stereo[outro_end:]
 
+    _GAP_THRESHOLD = 2.0
+    voiced_sorted = sorted(voiced_results, key=lambda r: r["start_sec"])
+    prev_end = intro_end_s
+    for vr in voiced_sorted:
+        gap = vr["start_sec"] - prev_end
+        if gap > _GAP_THRESHOLD:
+            gs = int(prev_end * _TARGET_SR)
+            ge = int(vr["start_sec"] * _TARGET_SR)
+            gs = min(gs, total_samples)
+            ge = min(ge, total_samples)
+            if ge > gs:
+                output[gs:ge] = orig[gs:ge].astype(np.float32)
+        prev_end = max(prev_end, vr["end_sec"])
+
+    # Also fill gap after last voiced line to outro_start
+    if outro_start_s < float("inf"):
+        gap = outro_start_s - prev_end
+        if gap > _GAP_THRESHOLD:
+            gs = int(prev_end * _TARGET_SR)
+            ge = int(outro_start_s * _TARGET_SR)
+            output[gs:ge] = orig[gs:ge].astype(np.float32)
+
     if errors:
         for err in errors:
             es = int(err["start_sec"] * _TARGET_SR)

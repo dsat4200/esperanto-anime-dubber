@@ -161,6 +161,33 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
     return anime_list[idx]["mkv"], None, anime_list[idx]["name"]
 
 
+def resolve_audio_stream(args, mkv_path: Path) -> int:
+    if args.audio_stream is not None:
+        return args.audio_stream
+    from anidub.extract import probe_audio_streams
+    streams = probe_audio_streams(mkv_path)
+    if len(streams) <= 1:
+        return 0
+    table = Table(title="Audio tracks", show_lines=True)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Codec")
+    table.add_column("Ch")
+    table.add_column("Rate")
+    table.add_column("Language")
+    table.add_column("Title")
+    for s in streams:
+        table.add_row(
+            str(s["index"]), s["codec"], str(s["channels"]),
+            str(s.get("sample_rate", "?")), s.get("language", "-"),
+            s.get("title", "-")[:30],
+        )
+    console.print(table)
+    idx = IntPrompt.ask("[bold]Pick audio track[/]", default=0)
+    if 0 <= idx < len(streams):
+        return streams[idx]["index"]
+    return 0
+
+
 def print_ref_transcription_block(ref_transcription: dict):
     text = ref_transcription.get("text", "") or "(empty)"
     panel = Panel.fit(
@@ -239,6 +266,7 @@ def print_result_block(stats: dict, out_file: Path, slack_ms: float):
 
 def run_single_line(args):
     mkv_path, ass_path, anime_name = resolve_anime(args)
+    audio_stream = resolve_audio_stream(args, mkv_path)
     if ass_path is None:
         ass_path = auto_detect_ass(mkv_path)
     if ass_path is None:
@@ -261,7 +289,7 @@ def run_single_line(args):
     ass_header = get_ass_header(ass_path)
 
     console.print("[bold]Checking Demucs cache...[/]")
-    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, run_dir)
+    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, run_dir, audio_stream_index=audio_stream)
     console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
     events = parse_ass(ass_path)
@@ -322,6 +350,7 @@ def run_single_line(args):
         result = process_line(
             mkv_path, line, args.whisper_model, out_dir,
             backend, full_no_vocals, ass_header,
+            audio_stream_index=audio_stream,
         )
 
         rt = result["diagnostics"].get("ref_transcription")
@@ -388,6 +417,7 @@ def run_single_line(args):
 
 def run_batch(args):
     mkv_path, ass_path, anime_name = resolve_anime(args)
+    audio_stream = resolve_audio_stream(args, mkv_path)
     if ass_path is None:
         ass_path = auto_detect_ass(mkv_path)
 
@@ -434,7 +464,7 @@ def run_batch(args):
     full_original_audio = batch_dir / "full_original_audio.wav"
     if not full_original_audio.exists():
         console.print("[bold]Extracting original audio...[/]")
-        extract_full_audio_resampled(mkv_path, full_original_audio, target_sr=44100)
+        extract_full_audio_resampled(mkv_path, full_original_audio, target_sr=44100, audio_stream_index=audio_stream)
         console.print(f"[dim]  original: {full_original_audio}[/]")
 
     events = parse_ass(ass_path)
@@ -630,6 +660,10 @@ def main():
     ap.add_argument(
         "--auto", action="store_true",
         help="auto-merge duplicate/progressive lines during translate (no prompts)",
+    )
+    ap.add_argument(
+        "--audio-stream", type=int, default=None,
+        help="audio stream index for Demucs + voice clone (auto-detected if not set)",
     )
     args = ap.parse_args()
 
