@@ -34,7 +34,8 @@ from anidub.ass import (
 from anidub.assembler import ensure_demucs_cache_from_wav
 from anidub.config import (
     DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT, ANIME_ROOT,
-    get_ffmpeg_location, today_output_dir, today_batch_dir, anime_batch_dir, anime_test_dir,
+    get_ffmpeg_location, today_output_dir, today_batch_dir,
+    episode_batch_dir, episode_test_dir,
     discover_anime, auto_detect_ass,
 )
 from anidub.extract import trim_silence, rip_audio_track
@@ -114,6 +115,19 @@ def show_anime_picker(anime_list):
     console.print(table)
 
 
+def show_episode_picker(mkvs: list[Path], anime_name: str) -> Path:
+    table = Table(title=f"Pick an episode — {anime_name}", show_lines=True)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Episode")
+    for i, mkv in enumerate(mkvs):
+        table.add_row(str(i + 1), mkv.name)
+    console.print(table)
+    idx = IntPrompt.ask("[bold]Pick episode[/]", default=1) - 1
+    if idx < 0 or idx >= len(mkvs):
+        raise SystemExit("Invalid choice")
+    return mkvs[idx]
+
+
 def save_skipped(skipped, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
@@ -145,7 +159,17 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
         match = [a for a in anime_list if a["name"] == args.anime]
         if not match:
             raise SystemExit(f"Anime '{args.anime}' not found in {ANIME_ROOT}/")
-        return match[0]["mkv"], None, match[0]["name"]
+        mkvs = sorted(set(a["mkv"] for a in match), key=lambda p: p.name)
+        if args.episode:
+            mkvs = [m for m in mkvs if args.episode.lower() in m.stem.lower()]
+            if not mkvs:
+                raise SystemExit(
+                    f"No episodes matching '{args.episode}' in {args.anime}"
+                )
+        if len(mkvs) == 1:
+            return mkvs[0], None, match[0]["name"]
+        picked = show_episode_picker(mkvs, match[0]["name"])
+        return picked, None, match[0]["name"]
 
     anime_list = discover_anime(ANIME_ROOT)
     if not anime_list:
@@ -160,6 +184,32 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
     if idx < 0 or idx >= len(anime_list):
         raise SystemExit("Invalid choice")
     return anime_list[idx]["mkv"], None, anime_list[idx]["name"]
+
+
+def resolve_anime_all(args) -> list[tuple[Path, str]]:
+    if args.mkv:
+        return [(args.mkv, "")]
+    if args.anime:
+        anime_list = discover_anime(ANIME_ROOT)
+        match = [a for a in anime_list if a["name"] == args.anime]
+        if not match:
+            raise SystemExit(f"Anime '{args.anime}' not found in {ANIME_ROOT}/")
+        mkvs = sorted(set(a["mkv"] for a in match), key=lambda p: p.name)
+        if args.episode:
+            mkvs = [m for m in mkvs if args.episode.lower() in m.stem.lower()]
+            if not mkvs:
+                raise SystemExit(
+                    f"No episodes matching '{args.episode}' in {args.anime}"
+                )
+        return [(m, match[0]["name"]) for m in mkvs]
+    anime_list = discover_anime(ANIME_ROOT)
+    if not anime_list:
+        raise SystemExit(f"No anime found in {ANIME_ROOT}/")
+    if args.episode:
+        anime_list = [a for a in anime_list if args.episode.lower() in a["mkv"].stem.lower()]
+        if not anime_list:
+            raise SystemExit(f"No episodes matching '{args.episode}'")
+    return [(a["mkv"], a["name"]) for a in anime_list]
 
 
 def resolve_audio_lang(args, mkv_path: Path) -> int:
@@ -287,7 +337,7 @@ def run_single_line(args):
         console.print("[red]No ASS file found. Use --translate to extract/translate from MKV.[/]")
         return 1
 
-    run_dir = anime_test_dir(anime_name) if anime_name else today_output_dir()
+    run_dir = episode_test_dir(anime_name, mkv_path.stem) if anime_name else today_output_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     ripped_wav = run_dir / "ripped_audio.wav"
@@ -434,9 +484,11 @@ def run_single_line(args):
     return 0
 
 
-def run_batch(args):
-    mkv_path, ass_path, anime_name = resolve_anime(args)
-    audio_stream = resolve_audio_lang(args, mkv_path)
+def run_batch(args, mkv_path=None, ass_path=None, anime_name=None, audio_stream=None):
+    if mkv_path is None:
+        mkv_path, ass_path, anime_name = resolve_anime(args)
+    if audio_stream is None:
+        audio_stream = resolve_audio_lang(args, mkv_path)
     if ass_path is None:
         ass_path = auto_detect_ass(mkv_path)
 
@@ -461,7 +513,7 @@ def run_batch(args):
         console.print("[red]No ASS file found.[/]")
         return 1
 
-    batch_dir = anime_batch_dir(anime_name) if anime_name else today_batch_dir()
+    batch_dir = episode_batch_dir(anime_name, mkv_path.stem) if anime_name else today_batch_dir()
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(
@@ -525,7 +577,7 @@ def run_batch(args):
         console.print("[red]No lines to voice.[/]")
         return 1
 
-    if not Confirm.ask(f"Voice {len(body_lines)} lines?"):
+    if not args.yes and not Confirm.ask(f"Voice {len(body_lines)} lines?"):
         return 0
 
     console.print("[bold]Loading TTS backends...[/]")
@@ -680,6 +732,8 @@ def main():
     ap.add_argument("--mkv", type=Path, default=None)
     ap.add_argument("--ass", type=Path, default=None)
     ap.add_argument("--anime", default=None, help="pick anime by folder name")
+    ap.add_argument("--all", action="store_true", help="process all episodes in the anime folder")
+    ap.add_argument("--episode", "-e", default=None, help="filter to episode(s) by stem substring")
     ap.add_argument(
         "--whisper-model",
         default="openai/whisper-tiny",
@@ -703,6 +757,10 @@ def main():
         help="auto-merge duplicate/progressive lines during translate (no prompts)",
     )
     ap.add_argument(
+        "--yes", "-y", action="store_true",
+        help="auto-answer yes to all confirmation prompts (unattended mode)",
+    )
+    ap.add_argument(
         "--audio-lang", default=None,
         help="audio track language for Demucs + voice clone (e.g. jpn, eng)",
     )
@@ -715,6 +773,25 @@ def main():
     if not get_ffmpeg_location():
         console.print("[red]ffmpeg not found. Run .\\install.ps1[/]")
         return 1
+
+    if args.all or (args.batch and args.episode):
+        if not args.batch:
+            console.print("[red]--all/--episode requires --batch[/]")
+            return 1
+        episodes = resolve_anime_all(args)
+        if not episodes:
+            console.print("[red]No episodes to process.[/]")
+            return 1
+        if not args.all and len(episodes) == 1:
+            return run_batch(args)
+        audio_lang_stream = resolve_audio_lang(args, episodes[0][0])
+        console.print(f"[bold]Processing {len(episodes)} episode(s)...[/]")
+        for i, (mkv, name) in enumerate(episodes):
+            console.rule(f"[bold cyan]Episode {i+1}/{len(episodes)}: {mkv.stem}[/]")
+            rc = run_batch(args, mkv_path=mkv, anime_name=name, audio_stream=audio_lang_stream)
+            if rc != 0:
+                console.print(f"[red]Episode {mkv.stem} failed (rc={rc}), continuing...[/]")
+        return 0
 
     if args.batch:
         return run_batch(args)

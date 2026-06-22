@@ -27,6 +27,14 @@ def anime_batch_dir(anime_name: str) -> Path:
     return BATCH_OUTPUT / anime_name / date.today().isoformat()
 
 
+def episode_batch_dir(anime_name: str, episode_stem: str) -> Path:
+    return BATCH_OUTPUT / anime_name / episode_stem / date.today().isoformat()
+
+
+def episode_test_dir(anime_name: str, episode_stem: str) -> Path:
+    return TEST_OUTPUT / anime_name / episode_stem / date.today().isoformat()
+
+
 def discover_anime(root: Path = ANIME_ROOT) -> list[dict]:
     results = []
     for subdir in sorted(root.iterdir()):
@@ -62,10 +70,6 @@ def auto_detect_ass(mkv_path: Path, ass_dir: Path | None = None) -> Path | None:
     eo_globs = list(ass_dir.glob("*.eo.ass")) + list(ass_dir.glob("*_eo.ass"))
     if eo_globs:
         return eo_globs[0]
-
-    first_ass = next(ass_dir.glob("*.ass"), None)
-    if first_ass:
-        return first_ass
 
     return None
 

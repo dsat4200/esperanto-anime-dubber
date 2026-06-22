@@ -3,9 +3,9 @@ import subprocess
 from pathlib import Path
 
 from anidub.config import MODEL_NAME, get_ffmpeg_location
-from anidub.extract import extract_full_audio, extract_video_clip
+from anidub.extract import extract_video_clip
 
-_MIX_WEIGHT_BG = 1.0
+_MIX_WEIGHT_BG = 1.2
 _MIX_WEIGHT_VOICE = 0.8
 
 
@@ -16,25 +16,22 @@ def _ffmpeg_bin():
     return str(Path(loc) / "ffmpeg.exe")
 
 
-def ensure_demucs_cache(mkv_path: Path, out_root: Path, audio_stream_index: int = 0) -> tuple[Path, Path]:
-    suffix = f"_{audio_stream_index}" if audio_stream_index else ""
-    vocals_cache = out_root / f"full_vocals{suffix}.wav"
+def ensure_demucs_cache_from_wav(source_wav: Path, out_root: Path) -> tuple[Path, Path]:
+    no_vocals_cache = out_root / "full_no_vocals.wav"
+    vocals_cache = out_root / "full_vocals.wav"
 
     if no_vocals_cache.exists():
         return no_vocals_cache, vocals_cache
 
     out_root.mkdir(parents=True, exist_ok=True)
-    full_audio = out_root / "_full_audio.wav"
-    extract_full_audio(mkv_path, full_audio, audio_stream_index=audio_stream_index)
 
     from anidub.separator import separate_audio
     sep_dir = out_root / "_full_separated"
-    result = separate_audio(full_audio, sep_dir)
+    result = separate_audio(source_wav, sep_dir)
 
     result["no_vocals"].rename(no_vocals_cache)
     result["vocals"].rename(vocals_cache)
     shutil.rmtree(sep_dir, ignore_errors=True)
-    full_audio.unlink(missing_ok=True)
     return no_vocals_cache, vocals_cache
 
 
