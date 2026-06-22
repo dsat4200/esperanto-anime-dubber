@@ -42,7 +42,8 @@ def process_line(
         out_path=ref_wav,
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         fut = ex.submit(
             tts_backend.generate,
             text=line["clean_text"],
@@ -53,10 +54,16 @@ def process_line(
         try:
             result = fut.result(timeout=voice_timeout)
         except concurrent.futures.TimeoutError:
+            ex.shutdown(wait=False)
             raise RuntimeError(
                 f"Voice generation timed out after {voice_timeout}s "
                 f"for line: {line['clean_text'][:80]!r}"
             )
+    except Exception:
+        ex.shutdown(wait=False)
+        raise
+    else:
+        ex.shutdown(wait=True)
 
     ref_transcription = result["diagnostics"].get("ref_transcription")
     transcript_text = ""

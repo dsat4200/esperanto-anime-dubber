@@ -1,6 +1,7 @@
 ﻿import argparse
 import json
 import sys
+import msvcrt
 import time
 from pathlib import Path
 
@@ -532,6 +533,8 @@ def run_batch(args):
     tts_backend = OmniVoiceTTSBackend(whisper_model=args.whisper_model)
     console.print("[green]TTS backend ready.[/]")
 
+    console.print("[dim]Press 's' to skip the next line (no Enter needed)[/]")
+
     clips_dir = batch_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
@@ -552,6 +555,23 @@ def run_batch(args):
         )
 
         for line in body_lines:
+            skip_this = False
+            while msvcrt.kbhit():
+                ch = msvcrt.getch().lower()
+                if ch == b's':
+                    skip_this = True
+            if skip_this:
+                progress.update(overall, advance=1,
+                                description=f"[yellow]Skip[/] {line['clean_text'][:60]}")
+                errors.append({
+                    "line_index": line["index"],
+                    "text": line["clean_text"],
+                    "start_sec": line["start_sec"],
+                    "end_sec": line["end_sec"],
+                    "error": "Manual skip (user pressed 's')",
+                })
+                continue
+
             dir_name = make_line_dir_name(line)
             line_dir = clips_dir / dir_name
             final_mkv = line_dir / "final.mkv"
@@ -570,6 +590,7 @@ def run_batch(args):
                 result = process_line(
                     ripped_wav, mkv_path, line, args.whisper_model, line_dir,
                     tts_backend, full_no_vocals, ass_header,
+                    voice_timeout=args.voice_timeout,
                 )
                 voiced_results.append(result)
             except Exception as e:
