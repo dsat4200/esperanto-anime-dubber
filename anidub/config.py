@@ -67,10 +67,6 @@ def auto_detect_ass(mkv_path: Path, ass_dir: Path | None = None) -> Path | None:
         if c.exists():
             return c
 
-    eo_globs = list(ass_dir.glob("*.eo.ass")) + list(ass_dir.glob("*_eo.ass"))
-    if eo_globs:
-        return eo_globs[0]
-
     return None
 
 
