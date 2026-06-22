@@ -368,6 +368,7 @@ def run_single_line(args):
         result = process_line(
             ripped_wav, mkv_path, line, args.whisper_model, out_dir,
             backend, full_no_vocals, ass_header,
+            voice_timeout=args.voice_timeout,
         )
 
         rt = result["diagnostics"].get("ref_transcription")
@@ -683,6 +684,10 @@ def main():
     ap.add_argument(
         "--audio-lang", default=None,
         help="audio track language for Demucs + voice clone (e.g. jpn, eng)",
+    )
+    ap.add_argument(
+        "--voice-timeout", type=int, default=120,
+        help="seconds before aborting a stuck voice generation (default 120)",
     )
     args = ap.parse_args()
 

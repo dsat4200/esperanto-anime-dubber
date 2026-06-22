@@ -1,3 +1,4 @@
+import concurrent.futures
 import re
 import tempfile
 from pathlib import Path
@@ -25,6 +26,7 @@ def process_line(
     tts_backend,
     full_no_vocals: Path,
     ass_header: str,
+    voice_timeout: int = 120,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,12 +42,21 @@ def process_line(
         out_path=ref_wav,
     )
 
-    result = tts_backend.generate(
-        text=line["clean_text"],
-        ref_audio=ref_wav,
-        target_duration=target_dur,
-        instruct=instruct,
-    )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(
+            tts_backend.generate,
+            text=line["clean_text"],
+            ref_audio=ref_wav,
+            target_duration=target_dur,
+            instruct=instruct,
+        )
+        try:
+            result = fut.result(timeout=voice_timeout)
+        except concurrent.futures.TimeoutError:
+            raise RuntimeError(
+                f"Voice generation timed out after {voice_timeout}s "
+                f"for line: {line['clean_text'][:80]!r}"
+            )
 
     ref_transcription = result["diagnostics"].get("ref_transcription")
     transcript_text = ""
