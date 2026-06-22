@@ -17,8 +17,8 @@ def _ffmpeg_bin():
 
 
 def ensure_demucs_cache(mkv_path: Path, out_root: Path, audio_stream_index: int = 0) -> tuple[Path, Path]:
-    no_vocals_cache = out_root / "full_no_vocals.wav"
-    vocals_cache = out_root / "full_vocals.wav"
+    suffix = f"_{audio_stream_index}" if audio_stream_index else ""
+    vocals_cache = out_root / f"full_vocals{suffix}.wav"
 
     if no_vocals_cache.exists():
         return no_vocals_cache, vocals_cache
