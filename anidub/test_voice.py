@@ -161,30 +161,43 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
     return anime_list[idx]["mkv"], None, anime_list[idx]["name"]
 
 
-def resolve_audio_stream(args, mkv_path: Path) -> int:
-    if args.audio_stream is not None:
-        return args.audio_stream
+def resolve_audio_lang(args, mkv_path: Path) -> int:
     from anidub.extract import probe_audio_streams
+    from rich.prompt import Prompt
     streams = probe_audio_streams(mkv_path)
     if len(streams) <= 1:
         return 0
+    if args.audio_lang is not None:
+        lang = args.audio_lang.lower()
+        for i, s in enumerate(streams):
+            if s["language"].lower() == lang:
+                return i
+        langs = [s["language"] for s in streams]
+        raise SystemExit(
+            f"Language '{args.audio_lang}' not found. Available: {', '.join(langs)}"
+        )
     table = Table(title="Audio tracks", show_lines=True)
     table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Language", style="green")
     table.add_column("Codec")
     table.add_column("Ch")
     table.add_column("Rate")
-    table.add_column("Language")
     table.add_column("Title")
-    for s in streams:
+    for i, s in enumerate(streams):
         table.add_row(
-            str(s["index"]), s["codec"], str(s["channels"]),
-            str(s.get("sample_rate", "?")), s.get("language", "-"),
-            s.get("title", "-")[:30],
+            str(i), s["language"], s["codec"], str(s["channels"]),
+            str(s.get("sample_rate", "?")), s.get("title", "-")[:30],
         )
     console.print(table)
-    idx = IntPrompt.ask("[bold]Pick audio track[/]", default=0)
-    if 0 <= idx < len(streams):
-        return streams[idx]["index"]
+    choice = Prompt.ask(
+        "[bold]Pick audio language[/]", default=streams[0]["language"]
+    ).strip().lower()
+    for i, s in enumerate(streams):
+        if s["language"].lower() == choice:
+            return i
+    for i, s in enumerate(streams):
+        if choice in s.get("title", "").lower():
+            return i
     return 0
 
 
@@ -266,7 +279,7 @@ def print_result_block(stats: dict, out_file: Path, slack_ms: float):
 
 def run_single_line(args):
     mkv_path, ass_path, anime_name = resolve_anime(args)
-    audio_stream = resolve_audio_stream(args, mkv_path)
+    audio_stream = resolve_audio_lang(args, mkv_path)
     if ass_path is None:
         ass_path = auto_detect_ass(mkv_path)
     if ass_path is None:
@@ -417,7 +430,7 @@ def run_single_line(args):
 
 def run_batch(args):
     mkv_path, ass_path, anime_name = resolve_anime(args)
-    audio_stream = resolve_audio_stream(args, mkv_path)
+    audio_stream = resolve_audio_lang(args, mkv_path)
     if ass_path is None:
         ass_path = auto_detect_ass(mkv_path)
 
@@ -662,8 +675,8 @@ def main():
         help="auto-merge duplicate/progressive lines during translate (no prompts)",
     )
     ap.add_argument(
-        "--audio-stream", type=int, default=None,
-        help="audio stream index for Demucs + voice clone (auto-detected if not set)",
+        "--audio-lang", default=None,
+        help="audio track language for Demucs + voice clone (e.g. jpn, eng)",
     )
     args = ap.parse_args()
 
