@@ -287,3 +287,54 @@ def extract_audio_slice(
     ]
     subprocess.run(cmd, check=True)
     return out_path
+
+
+def rip_audio_track(
+    mkv_path: Path, out_path: Path, audio_stream_index: int = 0,
+) -> Path:
+    mkv_path = Path(mkv_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path = _ffmpeg_bin()
+    subprocess.run([
+        bin_path, "-y", "-loglevel", "error",
+        "-i", str(mkv_path),
+        "-map", f"0:a:{audio_stream_index}",
+        "-ar", "44100",
+        "-ac", "2",
+        str(out_path),
+    ], check=True)
+    return out_path
+
+
+def extract_ref_clip_from_wav(
+    source_wav: Path,
+    start_sec: float,
+    max_dur: float = 3.0,
+    next_line_start: float | None = None,
+    out_path: Path | None = None,
+) -> Path:
+    source_wav = Path(source_wav)
+    if out_path is None:
+        out_path = Path(f"ref_{start_sec:.2f}.wav")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path = _ffmpeg_bin()
+
+    dur = max_dur
+    if next_line_start is not None:
+        dur = min(max_dur, next_line_start - start_sec)
+    if dur < 1.0:
+        dur = max_dur
+
+    subprocess.run([
+        bin_path, "-y", "-loglevel", "error",
+        "-ss", f"{start_sec:.3f}",
+        "-t", f"{dur:.3f}",
+        "-i", str(source_wav),
+        "-ar", "24000",
+        "-ac", "1",
+        "-sample_fmt", "s16",
+        str(out_path),
+    ], check=True)
+    return out_path

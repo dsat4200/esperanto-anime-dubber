@@ -8,7 +8,7 @@ import soundfile as sf
 from anidub.assembler import assemble_line
 from anidub.config import MODEL_NAME
 from anidub.esperanto import build_instruct_prompt
-from anidub.extract import extract_ref_clip_forward, trim_silence, fit_audio_to_duration
+from anidub.extract import extract_ref_clip_from_wav, trim_silence, fit_audio_to_duration
 
 REF_CLIP_DUR = 3.0
 SILENCE_TOP_DB = 30
@@ -17,6 +17,7 @@ SAFETY_MARGIN_SEC = 0.1
 
 
 def process_line(
+    source_wav: Path,
     mkv_path: Path,
     line: dict,
     whisper_model: str,
@@ -24,7 +25,6 @@ def process_line(
     tts_backend,
     full_no_vocals: Path,
     ass_header: str,
-    audio_stream_index: int = 0,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,8 +32,13 @@ def process_line(
     target_dur = (line["end_sec"] - line["start_sec"]) - SAFETY_MARGIN_SEC
 
     ref_wav = out_dir / "ref.wav"
-    extract_ref_clip_forward(mkv_path, line, max_dur=REF_CLIP_DUR, out_path=ref_wav,
-                             audio_stream_index=audio_stream_index)
+    extract_ref_clip_from_wav(
+        source_wav,
+        line["start_sec"],
+        max_dur=REF_CLIP_DUR,
+        next_line_start=line.get("next_line_start"),
+        out_path=ref_wav,
+    )
 
     result = tts_backend.generate(
         text=line["clean_text"],

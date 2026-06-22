@@ -30,13 +30,13 @@ from anidub.ass import (
     parse_ass,
     strip_override_tags,
 )
-from anidub.assembler import ensure_demucs_cache
+from anidub.assembler import ensure_demucs_cache_from_wav
 from anidub.config import (
     DEFAULT_ASS, DEFAULT_MKV, TEST_OUTPUT, ANIME_ROOT,
     get_ffmpeg_location, today_output_dir, today_batch_dir, anime_batch_dir, anime_test_dir,
     discover_anime, auto_detect_ass,
 )
-from anidub.extract import extract_ref_clip_forward, trim_silence, extract_full_audio_resampled
+from anidub.extract import trim_silence, rip_audio_track
 from anidub.pipeline import (
     process_line,
     get_op_ed_ranges,
@@ -289,6 +289,11 @@ def run_single_line(args):
     run_dir = anime_test_dir(anime_name) if anime_name else today_output_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    ripped_wav = run_dir / "ripped_audio.wav"
+    if not ripped_wav.exists():
+        rip_audio_track(mkv_path, ripped_wav, audio_stream_index=audio_stream)
+        console.print(f"[dim]Ripped audio -> {ripped_wav}[/]")
+
     console.print(
         Panel.fit(
             "[bold cyan]anidub-test-voice[/] - anime dubbing test\n"
@@ -302,7 +307,7 @@ def run_single_line(args):
     ass_header = get_ass_header(ass_path)
 
     console.print("[bold]Checking Demucs cache...[/]")
-    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, run_dir, audio_stream_index=audio_stream)
+    full_no_vocals, full_vocals = ensure_demucs_cache_from_wav(ripped_wav, run_dir)
     console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
     events = parse_ass(ass_path)
@@ -361,9 +366,8 @@ def run_single_line(args):
         backend = OmniVoiceTTSBackend(whisper_model=args.whisper_model)
 
         result = process_line(
-            mkv_path, line, args.whisper_model, out_dir,
+            ripped_wav, mkv_path, line, args.whisper_model, out_dir,
             backend, full_no_vocals, ass_header,
-            audio_stream_index=audio_stream,
         )
 
         rt = result["diagnostics"].get("ref_transcription")
@@ -470,15 +474,17 @@ def run_batch(args):
 
     ass_header = get_ass_header(ass_path)
 
+    ripped_wav = batch_dir / "ripped_audio.wav"
+    if not ripped_wav.exists():
+        console.print("[bold]Ripping selected audio track...[/]")
+        rip_audio_track(mkv_path, ripped_wav, audio_stream_index=audio_stream)
+        console.print(f"[dim]  ripped: {ripped_wav}[/]")
+
     console.print("[bold]Checking Demucs cache...[/]")
-    full_no_vocals, full_vocals = ensure_demucs_cache(mkv_path, batch_dir)
+    full_no_vocals, full_vocals = ensure_demucs_cache_from_wav(ripped_wav, batch_dir)
     console.print(f"[dim]  no_vocals: {full_no_vocals}[/]")
 
-    full_original_audio = batch_dir / "full_original_audio.wav"
-    if not full_original_audio.exists():
-        console.print("[bold]Extracting original audio...[/]")
-        extract_full_audio_resampled(mkv_path, full_original_audio, target_sr=44100, audio_stream_index=audio_stream)
-        console.print(f"[dim]  original: {full_original_audio}[/]")
+    full_original_audio = ripped_wav
 
     events = parse_ass(ass_path)
     main_events = filter_dialogue(events)
@@ -561,7 +567,7 @@ def run_batch(args):
 
             try:
                 result = process_line(
-                    mkv_path, line, args.whisper_model, line_dir,
+                    ripped_wav, mkv_path, line, args.whisper_model, line_dir,
                     tts_backend, full_no_vocals, ass_header,
                 )
                 voiced_results.append(result)
