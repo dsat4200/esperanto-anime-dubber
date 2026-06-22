@@ -1,10 +1,13 @@
 import argparse
+import json
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-from anidub.ass import parse_ass, strip_override_tags
+from anidub.ass import parse_ass, strip_override_tags, filter_dialogue, merge_duplicate_lines
 from anidub.config import get_ffmpeg_location, discover_anime, auto_detect_ass, ANIME_ROOT
 
 
@@ -15,8 +18,57 @@ def _ffmpeg_bin():
     return str(Path(loc) / "ffmpeg.exe")
 
 
-def extract_embedded_ass(mkv_path: Path, out_path: Path, stream_index: int = 0) -> Path:
-    import subprocess
+def _probe_sub_streams(mkv_path: Path) -> list[dict]:
+    bin_path = str(Path(_ffmpeg_bin()).parent / "ffprobe.exe")
+    out = subprocess.run([
+        bin_path, "-v", "error",
+        "-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title",
+        "-of", "json", str(mkv_path),
+    ], capture_output=True, text=True, check=True).stdout
+    info = json.loads(out)
+    subs = []
+    for s in info.get("streams", []):
+        if s.get("codec_name") == "ass" and s.get("codec_type") == "subtitle":
+            tags = s.get("tags", {})
+            subs.append({
+                "index": s["index"],
+                "language": tags.get("language", ""),
+                "title": tags.get("title", ""),
+            })
+    return subs
+
+
+def _pick_best_sub_stream(mkv_path: Path, streams: list[dict]) -> int:
+    if len(streams) == 1:
+        idx = streams[0]["index"]
+        print(f"  Single subtitle stream (absolute idx={idx}), using it.")
+        return 0
+
+    best_rel = 0
+    best_count = -1
+    for rel_idx, s in enumerate(streams):
+        tmp_ass = Path(tempfile.mktemp(suffix=".ass"))
+        try:
+            _extract_embedded_ass_raw(mkv_path, tmp_ass, rel_idx)
+            events = parse_ass(tmp_ass)
+            dialogue = filter_dialogue(events)
+            count = len(dialogue)
+            label = f"lang={s['language'] or '?'}"
+            if s.get("title"):
+                label += f" [{s['title']}]"
+            print(f"  Track {rel_idx} (abs={s['index']}, {label}): "
+                  f"{count} dialogue lines")
+            if count > best_count:
+                best_count = count
+                best_rel = rel_idx
+        finally:
+            tmp_ass.unlink(missing_ok=True)
+
+    print(f"  Auto-selected track {best_rel} ({best_count} dialogue lines)")
+    return best_rel
+
+
+def _extract_embedded_ass_raw(mkv_path: Path, out_path: Path, stream_index: int) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     bin_path = _ffmpeg_bin()
@@ -28,6 +80,19 @@ def extract_embedded_ass(mkv_path: Path, out_path: Path, stream_index: int = 0) 
         str(out_path),
     ], check=True)
     return out_path
+
+
+def extract_embedded_ass(
+    mkv_path: Path, out_path: Path, stream_index: int | None = None,
+) -> Path:
+    if stream_index is not None:
+        return _extract_embedded_ass_raw(mkv_path, out_path, stream_index)
+
+    subs = _probe_sub_streams(mkv_path)
+    if not subs:
+        raise RuntimeError(f"No ASS subtitle streams found in {mkv_path}")
+    chosen = _pick_best_sub_stream(mkv_path, subs)
+    return _extract_embedded_ass_raw(mkv_path, out_path, chosen)
 
 
 def translate_text(text: str, translator) -> str:
@@ -55,6 +120,12 @@ def translate_ass_to_esperanto(
 
     with in_path.open("r", encoding="utf-8-sig") as f:
         lines = f.readlines()
+
+    before = sum(1 for l in lines if l.startswith("Dialogue:"))
+    lines = merge_duplicate_lines(lines, min_repeat=4)
+    after = sum(1 for l in lines if l.startswith("Dialogue:"))
+    if after < before:
+        print(f"  Merged {before - after} duplicate lines ({before} -> {after} dialogue lines)")
 
     dlg_indices = [i for i, l in enumerate(lines) if l.startswith("Dialogue:")]
     total_dlg = len(dlg_indices)

@@ -100,6 +100,53 @@ def strip_override_tags(text: str) -> str:
     return text.strip()
 
 
+def merge_duplicate_lines(lines: list[str], min_repeat: int = 4) -> list[str]:
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith("Dialogue:"):
+            result.append(line)
+            i += 1
+            continue
+
+        parts0 = line.split(",", 9)
+        if len(parts0) < 10:
+            result.append(line)
+            i += 1
+            continue
+        text0 = strip_override_tags(parts0[9]).lower()
+
+        j = i + 1
+        while j < len(lines):
+            nxt = lines[j]
+            if not nxt.startswith("Dialogue:"):
+                break
+            nxt_parts = nxt.split(",", 9)
+            if len(nxt_parts) < 10:
+                break
+            nxt_text = strip_override_tags(nxt_parts[9]).lower()
+            if nxt_text != text0:
+                break
+            j += 1
+
+        run_len = j - i
+        if run_len >= min_repeat and text0:
+            last_end = lines[j - 1].split(",", 9)[2]
+            first_fields = parts0[:2]
+            rest_fields = parts0[3:]
+            merged = ",".join(
+                first_fields + [last_end] + rest_fields
+            )
+            result.append(merged + "\n" if not merged.endswith("\n") else merged)
+            i = j
+        else:
+            result.extend(lines[i:j])
+            i = j
+
+    return result
+
+
 def get_ass_header(path: Path) -> str:
     path = Path(path)
     with path.open("r", encoding="utf-8-sig") as f:
