@@ -112,6 +112,7 @@ def translate_ass_to_esperanto(
     out_path: Path,
     delay: float = 1.0,
     verbose: bool = True,
+    auto: bool = False,
 ) -> dict:
     from deep_translator import GoogleTranslator
 
@@ -122,7 +123,7 @@ def translate_ass_to_esperanto(
         lines = f.readlines()
 
     before = sum(1 for l in lines if l.startswith("Dialogue:"))
-    lines = merge_duplicate_lines(lines, min_repeat=4)
+    lines = merge_duplicate_lines(lines, min_repeat=4, interactive=not auto)
     after = sum(1 for l in lines if l.startswith("Dialogue:"))
     if after < before:
         print(f"  Merged {before - after} duplicate lines ({before} -> {after} dialogue lines)")
@@ -200,6 +201,10 @@ def main():
     ap.add_argument("--mkv", type=Path, default=None)
     ap.add_argument("--ass", type=Path, default=None)
     ap.add_argument("--delay", type=float, default=1.0)
+    ap.add_argument(
+        "--auto", action="store_true",
+        help="auto-merge all duplicate/progressive lines without prompting",
+    )
     args = ap.parse_args()
 
     if args.mkv:
@@ -248,7 +253,7 @@ def main():
 
     out_ass = mkv_path.parent / f"{mkv_path.stem}_eo.ass"
     print(f"Translating to Esperanto (delay={args.delay}s)...")
-    result = translate_ass_to_esperanto(src_ass, out_ass, delay=args.delay)
+    result = translate_ass_to_esperanto(src_ass, out_ass, delay=args.delay, auto=args.auto)
 
     print(f"Done: {result['translated']}/{result['total']} lines translated, "
           f"{result['failed']} failed in {result['elapsed_sec']:.0f}s")

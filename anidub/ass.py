@@ -100,7 +100,54 @@ def strip_override_tags(text: str) -> str:
     return text.strip()
 
 
-def merge_duplicate_lines(lines: list[str], min_repeat: int = 4) -> list[str]:
+def merge_duplicate_lines(lines: list[str], min_repeat: int = 4, interactive: bool = True) -> list[str]:
+    def _clean(line: str) -> str:
+        parts = line.split(",", 9)
+        if len(parts) < 10:
+            return ""
+        return strip_override_tags(parts[9]).strip().lower()
+
+    def _end(line: str) -> str:
+        return line.split(",", 9)[2]
+
+    def _build_merged(first: str, last: str) -> str:
+        fp = first.split(",", 9)
+        merged = ",".join(fp[:2] + [_end(last)] + fp[3:])
+        return merged + "\n" if not merged.endswith("\n") else merged
+
+    def _ask_merge(run_len: int, text: str, first: str, last: str) -> bool:
+        start_ts = first.split(",", 9)[1]
+        end_ts = _end(last)
+        ans = input(
+            f"  Merge {run_len} copies of '{text[:70]}' "
+            f"(0:{start_ts} -> 0:{end_ts})? [Y/n] "
+        ).strip().lower()
+        return ans in ("", "y", "yes")
+
+    def _check(out: list, cur_text: str, prev_line: str):
+        """Check if a pending merge should combine with the previous result line via substring."""
+        if not out:
+            return False
+        prev_line_in_result = out[-1]
+        if not prev_line_in_result.startswith("Dialogue:"):
+            return False
+        prev_text = _clean(prev_line_in_result)
+        if not cur_text or not prev_text:
+            return False
+        if cur_text == prev_text:
+            return False
+        if prev_text and cur_text and prev_text != cur_text:
+            shorter = prev_text if len(prev_text) < len(cur_text) else cur_text
+            longer = cur_text if len(prev_text) < len(cur_text) else prev_text
+            if len(shorter) >= 2 and len(shorter) >= len(longer) / 2:
+                if longer.startswith(shorter):
+                    ans = input(
+                        f"  Substring: '{prev_text[:50]}' -> '{cur_text[:50]}'. "
+                        f"Merge? [Y/n] "
+                    ).strip().lower()
+                    return ans in ("", "y", "yes")
+        return False
+
     result = []
     i = 0
     while i < len(lines):
@@ -110,39 +157,71 @@ def merge_duplicate_lines(lines: list[str], min_repeat: int = 4) -> list[str]:
             i += 1
             continue
 
-        parts0 = line.split(",", 9)
-        if len(parts0) < 10:
+        cur_text = _clean(line)
+        if not cur_text:
             result.append(line)
             i += 1
             continue
-        text0 = strip_override_tags(parts0[9]).lower()
 
         j = i + 1
-        while j < len(lines):
-            nxt = lines[j]
-            if not nxt.startswith("Dialogue:"):
-                break
-            nxt_parts = nxt.split(",", 9)
-            if len(nxt_parts) < 10:
-                break
-            nxt_text = strip_override_tags(nxt_parts[9]).lower()
-            if nxt_text != text0:
+        while j < len(lines) and lines[j].startswith("Dialogue:"):
+            if _clean(lines[j]) != cur_text:
                 break
             j += 1
 
         run_len = j - i
-        if run_len >= min_repeat and text0:
-            last_end = lines[j - 1].split(",", 9)[2]
-            first_fields = parts0[:2]
-            rest_fields = parts0[3:]
-            merged = ",".join(
-                first_fields + [last_end] + rest_fields
-            )
-            result.append(merged + "\n" if not merged.endswith("\n") else merged)
-            i = j
+        should_merge = run_len >= min_repeat
+        if not should_merge and run_len >= 2 and interactive:
+            should_merge = _ask_merge(run_len, cur_text, line, lines[j - 1])
+
+        if should_merge:
+            merged = _build_merged(line, lines[j - 1])
+
+            if interactive and _check(result, cur_text, lines[j - 1]):
+                prev_line = result.pop()
+                prev_text = _clean(prev_line)
+                longer_line = line if len(cur_text) >= len(prev_text) else prev_line
+                merged = _build_merged(prev_line, lines[j - 1])
+                merged_parts = merged.split(",", 9)
+                longer_parts = longer_line.split(",", 9)
+                if len(merged_parts) >= 10 and len(longer_parts) >= 10:
+                    merged_parts[9] = longer_parts[9]
+                    merged = ",".join(merged_parts)
+
+            result.append(merged)
         else:
-            result.extend(lines[i:j])
-            i = j
+            for k in range(i, j):
+                result.append(lines[k])
+
+        i = j
+
+    if not interactive:
+        return result
+
+    i = 0
+    while i < len(result) - 1:
+        a = result[i]
+        b = result[i + 1]
+        if not a.startswith("Dialogue:") or not b.startswith("Dialogue:"):
+            i += 1
+            continue
+        ta = _clean(a)
+        tb = _clean(b)
+        if ta and tb and ta != tb:
+            shorter = ta if len(ta) < len(tb) else tb
+            longer = tb if len(ta) < len(tb) else ta
+            if len(shorter) >= 2 and len(shorter) >= len(longer) / 2:
+                if longer.startswith(shorter):
+                    ans = input(
+                        f"  Substring: '{ta[:50]}' -> '{tb[:50]}'. "
+                        f"Merge? [Y/n] "
+                    ).strip().lower()
+                    if ans in ("", "y", "yes"):
+                        merged = _build_merged(a, b)
+                        result[i] = merged
+                        result.pop(i + 1)
+                        continue
+        i += 1
 
     return result
 

@@ -400,7 +400,7 @@ def run_batch(args):
             src_ass = ass_path
         ass_path = mkv_path.parent / f"{mkv_path.stem}_eo.ass"
         console.print(f"[bold]Translating to Esperanto...[/]")
-        result = translate_ass_to_esperanto(src_ass, ass_path, delay=1.0)
+        result = translate_ass_to_esperanto(src_ass, ass_path, delay=1.0, auto=args.auto)
         console.print(f"  {result['translated']}/{result['total']} lines, "
                       f"{result['failed']} failed, {result['elapsed_sec']:.0f}s")
         console.print(f"  -> {ass_path}")
@@ -626,6 +626,10 @@ def main():
     ap.add_argument(
         "--translate", action="store_true",
         help="extract/translate embedded ASS to Esperanto before voicing",
+    )
+    ap.add_argument(
+        "--auto", action="store_true",
+        help="auto-merge duplicate/progressive lines during translate (no prompts)",
     )
     args = ap.parse_args()
 
