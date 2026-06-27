@@ -93,6 +93,11 @@
         <input type="range" id="offset-slider" min="-500" max="500" value="0" step="10" oninput="onOffsetChange(this.value)">
       </div>
 
+      <div class="field">
+        <label>Speed (<span id="speed-val">1.00</span>x):</label>
+        <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
+      </div>
+
       <div class="field clone-only">
         <button class="primary" onclick="cloneCurrent()">Clone</button>
         <button onclick="previewCurrent()">Preview</button>

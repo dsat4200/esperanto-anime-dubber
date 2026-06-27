@@ -141,6 +141,7 @@ def clone_line(
     out_path: Path,
     whisper_model: str = "openai/whisper-tiny",
     instruct_extra: str | None = None,
+    speed_factor: float = 1.0,
     voice_timeout: int = 120,
 ) -> dict:
     if instruct_extra:
@@ -179,6 +180,22 @@ def clone_line(
 
     trimmed = trim_silence(raw_wav, sr, top_db=SILENCE_TOP_DB)
     effective_dur = len(trimmed) / sr
+
+    if abs(speed_factor - 1.0) > 0.01:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+            speed_tmp = Path(tmp_out.name)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+            speed_in = Path(tmp_in.name)
+        try:
+            sf.write(speed_in, trimmed, sr)
+            fit_audio_to_duration(speed_in, speed_tmp, effective_dur / speed_factor)
+            sped_wav, sped_sr = sf.read(speed_tmp)
+            trimmed = np.asarray(sped_wav, dtype=np.float32).T
+            sr = sped_sr
+            effective_dur = len(trimmed) / sr
+        finally:
+            Path(speed_in).unlink(missing_ok=True)
+            Path(speed_tmp).unlink(missing_ok=True)
 
     if effective_dur > target_dur:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:

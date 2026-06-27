@@ -187,6 +187,7 @@ def _clip_to_dict(clip):
         "clone_ms": clip.clone_ms,
         "attempts": clip.attempts,
         "instruct_extra": clip.instruct_extra,
+        "speed_factor": clip.speed_factor,
         "can_clone": clip.status != ClipStatus.NON_DUB,
     }
     proj = _anime.get_active_project()
@@ -290,6 +291,15 @@ def api_process(n):
     proj = _anime.get_active_project()
     result = proj.process_clip(n, character=character, mood=mood)
     return jsonify(result)
+
+
+@app.route("/api/clips/<int:n>/speed", methods=["POST"])
+def api_speed(n):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    _anime.get_active_project().set_clip_speed(n, data.get("speed_factor", 1.0))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/clips/<int:n>/accept", methods=["POST"])

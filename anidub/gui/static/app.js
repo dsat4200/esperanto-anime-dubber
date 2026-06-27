@@ -259,6 +259,9 @@ function renderClip() {
     document.getElementById('offset-slider').value = c.offset_ms;
     document.getElementById('offset-val').textContent = Math.round(c.offset_ms);
 
+    document.getElementById('speed-slider').value = Math.round((c.speed_factor || 1.0) * 100);
+    document.getElementById('speed-val').textContent = (c.speed_factor || 1.0).toFixed(2);
+
     const info = [];
     if (c.status === 'non_dub') {
         info.push('Original audio only');
@@ -410,6 +413,15 @@ async function onOffsetChange(val) {
     if (!c) return;
     await api(`/api/clips/${c.index}/offset`, { method: 'POST', body: { offset_ms: ms } });
     currentClip.offset_ms = ms;
+}
+
+async function onSpeedChange(val) {
+    const pct = parseInt(val) / 100;
+    document.getElementById('speed-val').textContent = pct.toFixed(2);
+    const c = currentClip;
+    if (!c) return;
+    await api(`/api/clips/${c.index}/speed`, { method: 'POST', body: { speed_factor: pct } });
+    currentClip.speed_factor = pct;
 }
 
 async function onCharacterChange() {

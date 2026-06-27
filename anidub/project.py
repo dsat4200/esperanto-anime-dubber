@@ -63,6 +63,7 @@ class ClipState:
     clone_ms: float | None = None
     attempts: int = 0
     instruct_extra: str | None = None
+    speed_factor: float = 1.0
 
 
 class Project:
@@ -222,6 +223,7 @@ class Project:
                 "clone_ms": None,
                 "attempts": 0,
                 "instruct_extra": None,
+                "speed_factor": 1.0,
             })
 
         for i, u in enumerate(usable):
@@ -242,6 +244,7 @@ class Project:
                 "clone_ms": None,
                 "attempts": 0,
                 "instruct_extra": None,
+                "speed_factor": 1.0,
             })
 
         for e in ed_events:
@@ -265,6 +268,7 @@ class Project:
                 "clone_ms": None,
                 "attempts": 0,
                 "instruct_extra": None,
+                "speed_factor": 1.0,
             })
 
         self.state["timeline"] = tl
@@ -380,6 +384,7 @@ class Project:
             clone_ms=entry.get("clone_ms"),
             attempts=entry.get("attempts", 0),
             instruct_extra=entry.get("instruct_extra"),
+            speed_factor=entry.get("speed_factor", 1.0),
         )
 
     def get_current_clip(self) -> ClipState | None:
@@ -488,6 +493,7 @@ class Project:
             target_duration=entry["end_sec"] - entry["start_sec"],
             instruct=instruct_prompt,
             instruct_extra=entry.get("instruct_extra"),
+            speed_factor=entry.get("speed_factor", 1.0),
             out_path=tts_out,
             whisper_model="openai/whisper-tiny",
         )
@@ -549,6 +555,11 @@ class Project:
             entry["ref_clip"] = None
         self.save()
 
+    def set_clip_speed(self, index: int, speed_factor: float):
+        entry = self._get_clip_entry(index)
+        entry["speed_factor"] = max(0.5, min(2.0, speed_factor))
+        self.save()
+
     def set_instruct_extra(self, index: int, instruct_extra: str | None):
         entry = self._get_clip_entry(index)
         entry["instruct_extra"] = instruct_extra
@@ -578,6 +589,7 @@ class Project:
         entry["offset_ms"] = 0.0
         entry["ref_source"] = RefSource.CLIP.value
         entry["ref_clip"] = None
+        entry["speed_factor"] = 1.0
         self.save()
 
     # ═══════════════════════════════════════════
