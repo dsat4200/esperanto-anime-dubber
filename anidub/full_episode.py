@@ -88,7 +88,7 @@ def build_full_episode(
         if tts.ndim > 1:
             tts = tts[:, 0]
         tts = _resample_mono(tts.astype(np.float32), tts_sr, _TARGET_SR)
-        offset = int(vr["start_sec"] * _TARGET_SR)
+        offset = int(vr.get("audio_start_sec", vr["start_sec"]) * _TARGET_SR)
         end_idx = offset + len(tts)
         if end_idx > total_samples:
             tts = tts[:total_samples - offset]

@@ -1,9 +1,21 @@
 let currentClip = null;
 let totalClips = 0;
 let characters = {};
-let timelineData = [];
+let timelineClips = [];
 let episodes = [];
 let activeStem = null;
+
+let timelineCtx = null;
+let timelineVP = { startSec: 0, pxPerSec: 50 };
+let timelineDrag = null;
+let timelineCtxMenuClipId = null;
+
+const STATUS_COLORS = {
+    pending: '#2a2a3e', translating: '#4a4060', translated: '#0f3460',
+    cloned: '#c8a000', accepted: '#0a4', rejected: '#a30',
+    skipped: '#555', non_dub: '#3a3a4e', sign: '#1a5a5a',
+};
+const RULER_H = 24, CLIP_TOP = 30, CLIP_MIN_H = 28;
 
 async function api(url, opts = {}) {
     const defaults = { headers: { 'Content-Type': 'application/json' } };
@@ -92,10 +104,12 @@ async function loadEpisodes() {
         } else {
             document.getElementById('setup-panel').style.display = 'none';
             document.getElementById('editor-panel').style.display = 'flex';
+            initTimelineCanvas();
             await loadCharacters();
             await loadTimeline();
             document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
-            await loadClip(await getFirstUnaccepted());
+            const first = await getFirstUnaccepted();
+            await loadClip(first);
         }
     } else if (episodes.length > 0) {
         await switchEpisode(episodes[0].stem);
@@ -118,10 +132,12 @@ async function switchEpisode(stem) {
         } else {
             document.getElementById('setup-panel').style.display = 'none';
             document.getElementById('editor-panel').style.display = 'flex';
+            initTimelineCanvas();
             await loadCharacters();
             await loadTimeline();
             document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
-            await loadClip(await getFirstUnaccepted());
+            const first = await getFirstUnaccepted();
+            await loadClip(first);
         }
     } catch (e) {
         hideOverlay();
@@ -177,10 +193,6 @@ async function runDemucs() {
 
 async function previewTrack(type, index) {
     try {
-        const resp = await api('/api/preview-sample',
-            { method: 'POST', body: { type, index } });
-        // This returns audio/video directly — not JSON
-        // Use fetch directly to handle binary response
         const blob = await fetch('/api/preview-sample', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -188,15 +200,9 @@ async function previewTrack(type, index) {
         }).then(r => r.blob());
         const url = URL.createObjectURL(blob);
         const video = document.getElementById('video-player');
-        if (type === 'audio') {
-            video.src = url;
-            video.load();
-            video.play();
-        } else {
-            video.src = url;
-            video.load();
-            video.play();
-        }
+        video.src = url;
+        video.load();
+        video.play();
     } catch (e) {
         console.error('previewTrack:', e);
     }
@@ -211,28 +217,29 @@ async function startEditing() {
 async function getFirstUnaccepted() {
     const data = await api('/api/stats');
     totalClips = data.total;
-    for (let i = 1; i <= totalClips; i++) {
-        const clip = await api('/api/clips/' + i);
-        if (clip.status !== 'accepted' && clip.status !== 'non_dub') return i;
+    if (!timelineClips.length) return null;
+    for (const c of timelineClips) {
+        if (c.status !== 'accepted' && c.status !== 'non_dub' && c.status !== 'sign') return c.clip_id;
     }
-    return 1;
+    return timelineClips[0]?.clip_id || null;
 }
 
 // ── Editor ───────────────────────────────────
 
-async function loadClip(n) {
-    if (!n || n < 1 || n > totalClips) return;
+async function loadClip(clipId) {
+    if (!clipId) return;
     try {
-        const clip = await api('/api/clips/' + n);
+        const clip = await api('/api/clips/' + clipId);
         currentClip = clip;
         renderClip();
         if (clip.status === 'non_dub') {
             loadRawPreview(clip.start_sec, clip.end_sec);
         } else if (clip.needs_processing) {
-            await autoProcess(n);
+            await autoProcess(clipId);
         } else if (clip.clone_path) {
             await previewCurrent();
         }
+        drawTimeline();
     } catch (e) {
         console.error('loadClip failed:', e);
     }
@@ -242,7 +249,7 @@ function renderClip() {
     const c = currentClip;
     if (!c) return;
     document.getElementById('clip-title').textContent =
-        `Clip ${c.index}/${totalClips}  ${fmtTs(c.start_sec)} → ${fmtTs(c.end_sec)}`;
+        `Clip ${c.clip_id}  ${fmtTs(c.start_sec)} → ${fmtTs(c.end_sec)}`;
     document.getElementById('original-text').textContent = c.original_text;
     document.getElementById('translation-text').value = c.translated_text || '';
     document.getElementById('pronunciation-text').value = c.pronunciation_override || '';
@@ -261,35 +268,29 @@ function renderClip() {
         ).join('');
     }
 
-    document.getElementById('offset-slider').value = c.offset_ms;
-    document.getElementById('offset-val').textContent = Math.round(c.offset_ms);
-
     document.getElementById('speed-slider').value = Math.round((c.speed_factor || 1.0) * 100);
     document.getElementById('speed-val').textContent = (c.speed_factor || 1.0).toFixed(2);
 
     const info = [];
-    if (c.status === 'non_dub') {
-        info.push('Original audio only');
-    }
-    if (c.clone_ms) info.push(`Clone: ${(c.clone_ms/1000).toFixed(1)}s`);
+    if (c.status === 'non_dub') info.push('Original audio only');
+    if (c.status === 'sign') info.push('Sign/No audio');
+    if (c.clone_ms) info.push(`Clone: ${(c.clone_ms / 1000).toFixed(1)}s`);
     if (c.attempts) info.push(`Attempts: ${c.attempts}`);
+    if (c.audio_offset_ms) info.push(`Offset: ${c.audio_offset_ms.toFixed(0)}ms`);
     info.push(`Status: ${c.status}`);
     document.getElementById('clone-info').textContent = info.join('  |  ');
 
-    // Hide clone/accept/reject for non-dub
-    const nd = c.status === 'non_dub';
+    const nd = c.status === 'non_dub' || c.status === 'sign';
     document.querySelectorAll('.clone-only').forEach(el => el.style.display = nd ? 'none' : '');
     document.querySelectorAll('.accept-only').forEach(el => el.style.display = nd ? 'none' : '');
-
-    renderTimelineHighlight();
 }
 
-async function autoProcess(n) {
+async function autoProcess(clipId) {
     showOverlay('Processing...');
     try {
         const char = document.getElementById('char-select').value || undefined;
         const mood = document.getElementById('mood-select').value || 'normal';
-        const result = await api(`/api/clips/${n}/process`,
+        const result = await api(`/api/clips/${clipId}/process`,
             { method: 'POST', body: { character: char, mood } });
         currentClip.status = result.status;
         currentClip.translated_text = result.translated_text || currentClip.translated_text;
@@ -308,13 +309,15 @@ async function autoProcess(n) {
 }
 
 async function prevClip() {
-    const resp = await api('/api/clips/' + (currentClip ? currentClip.index - 1 : 1)).catch(() => null);
-    if (resp && !resp.error) loadClip(resp.index);
+    if (!currentClip || !currentClip.clip_id) return;
+    const idx = timelineClips.findIndex(c => c.clip_id === currentClip.clip_id);
+    if (idx > 0) loadClip(timelineClips[idx - 1].clip_id);
 }
 
 async function nextClip() {
-    const resp = await api('/api/clips/' + (currentClip ? currentClip.index + 1 : 1)).catch(() => null);
-    if (resp && !resp.error) loadClip(resp.index);
+    if (!currentClip || !currentClip.clip_id) return;
+    const idx = timelineClips.findIndex(c => c.clip_id === currentClip.clip_id);
+    if (idx >= 0 && idx < timelineClips.length - 1) loadClip(timelineClips[idx + 1].clip_id);
 }
 
 async function restoreTranslation() {
@@ -322,8 +325,7 @@ async function restoreTranslation() {
     if (!c) return;
     showOverlay('Translating...');
     try {
-        const resp = await api(`/api/clips/${c.index}/translate`,
-            { method: 'POST' });
+        const resp = await api(`/api/clips/${c.clip_id}/translate`, { method: 'POST' });
         document.getElementById('translation-text').value = resp.translated_text;
         currentClip.translated_text = resp.translated_text;
         currentClip.status = 'translated';
@@ -338,22 +340,19 @@ async function restoreTranslation() {
 async function saveSettings() {
     const c = currentClip;
     if (!c) return;
-    const index = c.index;
-
+    const clipId = c.clip_id;
     const translation = document.getElementById('translation-text').value.trim() || undefined;
     const pronunciation = document.getElementById('pronunciation-text').value.trim() || null;
     const instructExtra = document.getElementById('instruct-extra').value.trim() || null;
     const character = document.getElementById('char-select').value || null;
     const mood = document.getElementById('mood-select').value || 'normal';
-    const offsetMs = parseFloat(document.getElementById('offset-slider').value);
     const speedFactor = parseInt(document.getElementById('speed-slider').value) / 100;
 
-    await api(`/api/clips/${index}/translate`, { method: 'POST', body: { text_override: translation } });
-    await api(`/api/clips/${index}/pronunciation`, { method: 'POST', body: { pronunciation_override: pronunciation } });
-    await api(`/api/clips/${index}/instruct`, { method: 'POST', body: { instruct_extra: instructExtra } });
-    await api(`/api/clips/${index}/character`, { method: 'POST', body: { character, mood } });
-    await api(`/api/clips/${index}/offset`, { method: 'POST', body: { offset_ms: offsetMs } });
-    await api(`/api/clips/${index}/speed`, { method: 'POST', body: { speed_factor: speedFactor } });
+    await api(`/api/clips/${clipId}/translate`, { method: 'POST', body: { text_override: translation } });
+    await api(`/api/clips/${clipId}/pronunciation`, { method: 'POST', body: { pronunciation_override: pronunciation } });
+    await api(`/api/clips/${clipId}/instruct`, { method: 'POST', body: { instruct_extra: instructExtra } });
+    await api(`/api/clips/${clipId}/character`, { method: 'POST', body: { character, mood } });
+    await api(`/api/clips/${clipId}/speed`, { method: 'POST', body: { speed_factor: speedFactor } });
 
     currentClip.translated_text = translation;
     currentClip.status = 'translated';
@@ -361,7 +360,6 @@ async function saveSettings() {
     currentClip.instruct_extra = instructExtra;
     currentClip.character = character;
     currentClip.character_mood = mood;
-    currentClip.offset_ms = offsetMs;
     currentClip.speed_factor = speedFactor;
     renderClip();
     loadTimeline();
@@ -374,7 +372,7 @@ async function cloneCurrent() {
     try {
         const char = document.getElementById('char-select').value || undefined;
         const mood = document.getElementById('mood-select').value || 'normal';
-        const resp = await api(`/api/clips/${c.index}/clone`,
+        const resp = await api(`/api/clips/${c.clip_id}/clone`,
             { method: 'POST', body: { character: char, mood } });
         currentClip.clone_ms = resp.inference_ms;
         currentClip.status = 'cloned';
@@ -393,7 +391,7 @@ async function previewCurrent() {
     if (!c) return;
     showOverlay('Generating preview...');
     try {
-        const resp = await api(`/api/clips/${c.index}/preview`, { method: 'POST' });
+        const resp = await api(`/api/clips/${c.clip_id}/preview`, { method: 'POST' });
         const video = document.getElementById('video-player');
         video.src = resp.url + '?t=' + Date.now();
         video.load();
@@ -420,12 +418,22 @@ async function loadRawPreview(start_sec, end_sec) {
     }
 }
 
+async function toggleSign() {
+    const c = currentClip;
+    if (!c) return;
+    const newStatus = c.status === 'sign' ? 'pending' : 'sign';
+    await api(`/api/clips/${c.clip_id}/status`, { method: 'POST', body: { status: newStatus } });
+    currentClip.status = newStatus;
+    renderClip();
+    loadTimeline();
+}
+
 async function acceptCurrent() {
     const c = currentClip;
     if (!c) return;
-    if (c.needs_processing) await autoProcess(c.index);
+    if (c.needs_processing) await autoProcess(c.clip_id);
     try {
-        await api(`/api/clips/${c.index}/accept`, { method: 'POST' });
+        await api(`/api/clips/${c.clip_id}/accept`, { method: 'POST' });
         currentClip.status = 'accepted';
         loadTimeline();
         loadEpisodes();
@@ -438,7 +446,7 @@ async function acceptCurrent() {
 async function rejectCurrent() {
     const c = currentClip;
     if (!c) return;
-    await api(`/api/clips/${c.index}/reject`, { method: 'POST' });
+    await api(`/api/clips/${c.clip_id}/reject`, { method: 'POST' });
     currentClip.status = 'rejected';
     renderClip();
     loadTimeline();
@@ -447,7 +455,7 @@ async function rejectCurrent() {
 async function resetCurrent() {
     const c = currentClip;
     if (!c) return;
-    await api(`/api/clips/${c.index}/reset`, { method: 'POST' });
+    await api(`/api/clips/${c.clip_id}/reset`, { method: 'POST' });
     currentClip.status = 'pending';
     currentClip.translated_text = null;
     currentClip.clone_ms = null;
@@ -455,21 +463,12 @@ async function resetCurrent() {
     loadTimeline();
 }
 
-async function onOffsetChange(val) {
-    const ms = parseFloat(val);
-    document.getElementById('offset-val').textContent = Math.round(ms);
-    const c = currentClip;
-    if (!c) return;
-    await api(`/api/clips/${c.index}/offset`, { method: 'POST', body: { offset_ms: ms } });
-    currentClip.offset_ms = ms;
-}
-
 async function onSpeedChange(val) {
     const pct = parseInt(val) / 100;
     document.getElementById('speed-val').textContent = pct.toFixed(2);
     const c = currentClip;
     if (!c) return;
-    await api(`/api/clips/${c.index}/speed`, { method: 'POST', body: { speed_factor: pct } });
+    await api(`/api/clips/${c.clip_id}/speed`, { method: 'POST', body: { speed_factor: pct } });
     currentClip.speed_factor = pct;
 }
 
@@ -478,46 +477,388 @@ async function onCharacterChange() {
     if (!c) return;
     const char = document.getElementById('char-select').value || null;
     const mood = document.getElementById('mood-select').value || 'normal';
-    await api(`/api/clips/${c.index}/character`, { method: 'POST', body: { character: char, mood } });
+    await api(`/api/clips/${c.clip_id}/character`, { method: 'POST', body: { character: char, mood } });
     currentClip.character = char;
     currentClip.character_mood = mood;
     renderClip();
 }
 
-// ── Timeline ─────────────────────────────────
+// ── Timeline Canvas ───────────────────────────
+
+function initTimelineCanvas() {
+    const canvas = document.getElementById('timeline-canvas');
+    timelineCtx = canvas.getContext('2d');
+
+    const resizeCanvas = () => {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width * (window.devicePixelRatio || 1);
+        canvas.height = rect.height * (window.devicePixelRatio || 1);
+        timelineCtx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+        drawTimeline();
+    };
+    resizeCanvas();
+    new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
+
+    canvas.addEventListener('mousedown', onTimelineMouseDown);
+    canvas.addEventListener('mousemove', onTimelineMouseMove);
+    canvas.addEventListener('mouseup', onTimelineMouseUp);
+    canvas.addEventListener('mouseleave', onTimelineMouseUp);
+    canvas.addEventListener('wheel', onTimelineWheel, { passive: false });
+    canvas.addEventListener('contextmenu', onTimelineCtxMenu);
+}
+
+function pxToSec(px) {
+    return px / (timelineVP.pxPerSec || 1) + timelineVP.startSec;
+}
+function secToPx(sec) {
+    return (sec - timelineVP.startSec) * timelineVP.pxPerSec;
+}
+
+function assignLanes(clips) {
+    const laneEnds = [];
+    const result = [];
+    for (const c of clips) {
+        let lane = 0;
+        while (lane < laneEnds.length && laneEnds[lane] > c.start_sec) lane++;
+        if (lane === laneEnds.length) laneEnds.push(c.end_sec);
+        else laneEnds[lane] = c.end_sec;
+        result.push({ ...c, lane });
+    }
+    const maxLanes = Math.max(laneEnds.length, 1);
+    return { lanes: result, laneCount: maxLanes };
+}
+
+function drawTimeline() {
+    const ctx = timelineCtx;
+    const canvas = ctx.canvas;
+    if (!canvas) return;
+    const W = canvas.width / (window.devicePixelRatio || 1);
+    const H = canvas.height / (window.devicePixelRatio || 1);
+
+    ctx.clearRect(0, 0, W, H);
+
+    if (!timelineClips.length) return;
+
+    const totalEnd = Math.max(...timelineClips.map(c => c.end_sec), timelineClips[0].end_sec);
+    timelineVP.startSec = Math.max(0, Math.min(timelineVP.startSec, totalEnd - 5));
+
+    const pxPerSec = Math.max(timelineVP.pxPerSec, 2);
+    timelineVP.pxPerSec = pxPerSec;
+
+    // Ruler
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, W, RULER_H);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    const tickStep = pxPerSec > 200 ? 0.5 : pxPerSec > 100 ? 1 : pxPerSec > 50 ? 2 : pxPerSec > 20 ? 5 : pxPerSec > 10 ? 10 : 30;
+    let t = Math.floor(timelineVP.startSec / tickStep) * tickStep;
+    ctx.fillStyle = '#666';
+    ctx.font = '10px monospace';
+    while (t <= timelineVP.startSec + W / pxPerSec) {
+        const x = secToPx(t);
+        ctx.beginPath();
+        ctx.moveTo(x, RULER_H - 8);
+        ctx.lineTo(x, RULER_H);
+        ctx.stroke();
+        ctx.fillText(fmtTs(t), x + 3, RULER_H - 3);
+        t += tickStep;
+    }
+
+    // Lanes
+    const { lanes, laneCount } = assignLanes(timelineClips);
+    const laneH = Math.max(CLIP_MIN_H, (H - CLIP_TOP - 4) / laneCount);
+
+    // Selected pointer
+    if (currentClip) {
+        const cx = secToPx(currentClip.start_sec + (currentClip.end_sec - currentClip.start_sec) / 2);
+        if (cx >= -10 && cx <= W + 10) {
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(cx, CLIP_TOP - 10);
+            ctx.lineTo(cx - 6, CLIP_TOP - 2);
+            ctx.lineTo(cx + 6, CLIP_TOP - 2);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
+    for (const c of lanes) {
+        const x = secToPx(c.start_sec);
+        const w = Math.max((c.end_sec - c.start_sec) * pxPerSec, 4);
+        const y = CLIP_TOP + c.lane * laneH + 2;
+        const h = laneH - 4;
+        const isCurrent = currentClip && currentClip.clip_id === c.clip_id;
+
+        // Clip body
+        const color = STATUS_COLORS[c.status] || '#2a2a3e';
+        ctx.fillStyle = isCurrent ? brighten(color, 30) : color;
+        roundRect(ctx, x, y, w, h, 4);
+        ctx.fill();
+
+        // Sign crosshatch
+        if (c.status === 'sign') {
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.lineWidth = 1;
+            for (let sx = x + 4; sx < x + w; sx += 8) {
+                ctx.beginPath();
+                ctx.moveTo(sx, y);
+                ctx.lineTo(sx + 8, y + h);
+                ctx.stroke();
+            }
+        }
+
+        // Border
+        ctx.strokeStyle = isCurrent ? '#fff' : '#0f3460';
+        ctx.lineWidth = isCurrent ? 2 : 1;
+        roundRect(ctx, x, y, w, h, 4);
+        ctx.stroke();
+
+        // Label
+        ctx.fillStyle = '#ccc';
+        ctx.font = `${Math.max(9, Math.min(11, h * 0.4))}px monospace`;
+        ctx.textAlign = 'center';
+        const label = c.clip_id;
+        const textW = ctx.measureText(label).width;
+        if (w > textW + 8) {
+            ctx.fillText(label, x + w / 2, y + h / 2 + 4);
+        }
+
+        // Audio bar
+        const offsetPx = c.audio_offset_ms / 1000 * pxPerSec;
+        const audioDur = (c.end_sec - c.start_sec) * pxPerSec;
+        const ax = x + offsetPx;
+        const aw = Math.max(audioDur, 6);
+        ctx.fillStyle = 'rgba(233,69,96,0.25)';
+        roundRect(ctx, ax, y + h - 6, aw, 6, 2);
+        ctx.fill();
+
+        // Drag handles
+        if (isCurrent) {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(x - 3, y, 6, h);
+            ctx.fillRect(x + w - 3, y, 6, h);
+            ctx.fillRect(ax + aw - 3, y + h - 6, 6, 6);
+        }
+    }
+}
+
+function brighten(hex, amount) {
+    const r = Math.min(255, parseInt(hex.slice(1, 3), 16) + amount);
+    const g = Math.min(255, parseInt(hex.slice(3, 5), 16) + amount);
+    const b = Math.min(255, parseInt(hex.slice(5, 7), 16) + amount);
+    return `rgb(${r},${g},${b})`;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+function hitTestTimeline(mx, my) {
+    const { lanes } = assignLanes(timelineClips);
+    for (const c of lanes) {
+        const x = secToPx(c.start_sec);
+        const w = Math.max((c.end_sec - c.start_sec) * timelineVP.pxPerSec, 4);
+        const laneH = Math.max(CLIP_MIN_H, (timelineCtx.canvas.height / (window.devicePixelRatio || 1) - CLIP_TOP - 4) / Math.max(assignLanes(timelineClips).laneCount, 1));
+        const y = CLIP_TOP + c.lane * laneH + 2;
+        const h = laneH - 4;
+
+        const offsetPx = c.audio_offset_ms / 1000 * timelineVP.pxPerSec;
+        const audioDur = (c.end_sec - c.start_sec) * timelineVP.pxPerSec;
+        const ax = x + offsetPx;
+        const aw = Math.max(audioDur, 6);
+
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x + w - 5 && mx <= x + w + 5 && my >= y && my <= y + h) {
+            return { type: 'handle-end', clipId: c.clip_id };
+        }
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x - 5 && mx <= x + 5 && my >= y && my <= y + h) {
+            return { type: 'handle-start', clipId: c.clip_id };
+        }
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= ax && mx <= ax + aw && my >= y + h - 8 && my <= y + h) {
+            return { type: 'audio-handle', clipId: c.clip_id };
+        }
+        if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
+            return { type: 'clip', clipId: c.clip_id };
+        }
+    }
+    return { type: 'empty', clipId: null };
+}
+
+function onTimelineMouseDown(e) {
+    const rect = e.target.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const hit = hitTestTimeline(mx, my);
+
+    timelineDrag = {
+        type: hit.type,
+        clipId: hit.clipId,
+        startX: mx,
+        startSec: timelineVP.startSec,
+        origStart: null,
+        origEnd: null,
+        origOffset: null,
+    };
+
+    if (hit.type === 'handle-start' || hit.type === 'handle-end' || hit.type === 'audio-handle') {
+        const c = timelineClips.find(cl => cl.clip_id === hit.clipId);
+        if (c) {
+            timelineDrag.origStart = c.start_sec;
+            timelineDrag.origEnd = c.end_sec;
+            timelineDrag.origOffset = c.audio_offset_ms;
+        }
+    } else if (hit.type === 'empty') {
+        timelineDrag.type = 'pan';
+        e.target.style.cursor = 'grabbing';
+    }
+}
+
+function onTimelineMouseMove(e) {
+    const rect = e.target.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    if (!timelineDrag) {
+        const hit = hitTestTimeline(mx, my);
+        if (hit.type === 'handle-start' || hit.type === 'handle-end') {
+            e.target.style.cursor = 'ew-resize';
+        } else if (hit.type === 'audio-handle') {
+            e.target.style.cursor = 'ew-resize';
+        } else if (hit.type === 'clip') {
+            e.target.style.cursor = 'pointer';
+        } else {
+            e.target.style.cursor = 'grab';
+        }
+        return;
+    }
+
+    if (timelineDrag.type === 'pan') {
+        const dx = (mx - timelineDrag.startX) / timelineVP.pxPerSec;
+        timelineVP.startSec = Math.max(0, timelineDrag.startSec - dx);
+        drawTimeline();
+        return;
+    }
+
+    if (!timelineDrag.clipId) return;
+    const clip = timelineClips.find(c => c.clip_id === timelineDrag.clipId);
+    if (!clip) return;
+
+    const dt = (mx - timelineDrag.startX) / timelineVP.pxPerSec;
+
+    if (timelineDrag.type === 'handle-start') {
+        clip.start_sec = Math.max(0, timelineDrag.origStart + dt);
+        if (clip.start_sec >= clip.end_sec - 0.1) clip.start_sec = clip.end_sec - 0.1;
+        drawTimeline();
+    } else if (timelineDrag.type === 'handle-end') {
+        clip.end_sec = Math.max(clip.start_sec + 0.1, timelineDrag.origEnd + dt);
+        drawTimeline();
+    } else if (timelineDrag.type === 'audio-handle') {
+        clip.audio_offset_ms = Math.max(-clip.start_sec * 1000, timelineDrag.origOffset + dt * 1000);
+        drawTimeline();
+    }
+}
+
+async function onTimelineMouseUp(e) {
+    e.target.style.cursor = 'grab';
+    if (!timelineDrag) return;
+
+    const drag = timelineDrag;
+    timelineDrag = null;
+
+    if (drag.type === 'pan') return;
+
+    if (!drag.clipId) return;
+    const clip = timelineClips.find(c => c.clip_id === drag.clipId);
+    if (!clip) return;
+
+    if (drag.type === 'handle-start' || drag.type === 'handle-end') {
+        await api(`/api/clips/${drag.clipId}/resize`, {
+            method: 'POST',
+            body: { start_sec: clip.start_sec, end_sec: clip.end_sec },
+        });
+    } else if (drag.type === 'audio-handle') {
+        await api(`/api/clips/${drag.clipId}/audio-offset`, {
+            method: 'POST',
+            body: { offset_ms: clip.audio_offset_ms },
+        });
+    } else if (drag.type === 'clip') {
+        loadClip(drag.clipId);
+    }
+}
+
+function onTimelineWheel(e) {
+    e.preventDefault();
+    const rect = e.target.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const secAtCursor = pxToSec(mx);
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    timelineVP.pxPerSec = Math.max(2, Math.min(2000, timelineVP.pxPerSec * factor));
+    timelineVP.startSec = Math.max(0, secAtCursor - mx / timelineVP.pxPerSec);
+    drawTimeline();
+}
+
+function onTimelineCtxMenu(e) {
+    e.preventDefault();
+    const rect = e.target.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const hit = hitTestTimeline(mx, my);
+    if (!hit.clipId) return;
+    timelineCtxMenuClipId = hit.clipId;
+    const menu = document.getElementById('timeline-menu');
+    menu.style.display = 'block';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    setTimeout(() => document.addEventListener('click', hideCtxMenu, { once: true }), 0);
+}
+
+function hideCtxMenu() {
+    document.getElementById('timeline-menu').style.display = 'none';
+}
+
+async function ctxDelete() {
+    if (!timelineCtxMenuClipId) return;
+    await api(`/api/clips/${timelineCtxMenuClipId}/delete`, { method: 'POST' });
+    hideCtxMenu();
+    await loadTimeline();
+    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) {
+        nextClip();
+    }
+}
+
+async function ctxToggleSign() {
+    if (!timelineCtxMenuClipId) return;
+    const clip = timelineClips.find(c => c.clip_id === timelineCtxMenuClipId);
+    const newStatus = (clip && clip.status === 'sign') ? 'pending' : 'sign';
+    await api(`/api/clips/${timelineCtxMenuClipId}/status`, { method: 'POST', body: { status: newStatus } });
+    hideCtxMenu();
+    await loadTimeline();
+    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) {
+        currentClip.status = newStatus;
+        renderClip();
+    }
+}
+
+// ── Timeline data ─────────────────────────────
 
 async function loadTimeline() {
     try {
         const data = await api('/api/timeline');
-        timelineData = data;
-        renderTimelineBar();
+        timelineClips = data;
+        totalClips = data.length;
+        drawTimeline();
     } catch (e) { console.error(e); }
-}
-
-function renderTimelineBar() {
-    const bar = document.getElementById('timeline-inner');
-    if (!timelineData.length) { bar.innerHTML = ''; return; }
-
-    const totalDur = timelineData.reduce((s, r) => s + r.duration, 0);
-    bar.innerHTML = timelineData.map(r => {
-        const pct = (r.duration / totalDur * 100).toFixed(2);
-        const cls = r.kind === 'clip'
-            ? `tl-${r.status || 'pending'}${r.clip_index === (currentClip?.index) ? ' current' : ''}`
-            : `tl-${r.kind}`;
-        const label = r.kind === 'clip' ? `#${r.clip_index}` : r.kind.toUpperCase();
-        return `<div class="${cls}" style="width:${pct}%"
-                     onclick="${r.kind === 'clip' ? `loadClip(${r.clip_index})` : ''}"
-                     title="${label} ${fmtTs(r.start_sec)}→${fmtTs(r.end_sec)}">${label}</div>`;
-    }).join('');
-}
-
-function renderTimelineHighlight() {
-    const divs = document.querySelectorAll('#timeline-inner div');
-    divs.forEach(d => d.classList.remove('current'));
-    if (!currentClip) return;
-    divs.forEach(d => {
-        if (d.textContent === '#' + currentClip.index) d.classList.add('current');
-    });
 }
 
 function onVideoTimeUpdate() {}
@@ -561,7 +902,7 @@ async function saveCharacter() {
     const mood = document.getElementById('mood-select').value || 'normal';
     showOverlay('Saving...');
     try {
-        await api('/api/characters', { method: 'POST', body: { name, mood, clip_index: c.index } });
+        await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
         await loadCharacters();
         renderClip();
     } catch (e) { alert('Save failed: ' + e.message); }
@@ -582,7 +923,7 @@ async function addCharacter() {
     const c = currentClip;
     if (!c) return;
     try {
-        await api('/api/characters', { method: 'POST', body: { name, mood, clip_index: c.index } });
+        await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
         await loadCharacters();
         renderCharPanel();
         renderClip();
@@ -600,7 +941,7 @@ async function translateAll() {
         await api('/api/translate-all', { method: 'POST' });
         await pollProgress('translate-all', 'Translating');
         loadTimeline();
-        if (currentClip) loadClip(currentClip.index);
+        if (currentClip) loadClip(currentClip.clip_id);
     } catch (e) { alert('Translate all failed: ' + e.message); }
     hideOverlay();
 }
@@ -612,7 +953,7 @@ async function cloneAll() {
         const resp = await api('/api/clone-all', { method: 'POST' });
         await pollProgress('clone-all', 'Cloning');
         loadTimeline();
-        if (currentClip) loadClip(currentClip.index);
+        if (currentClip) loadClip(currentClip.clip_id);
     } catch (e) { alert('Clone all failed: ' + e.message); }
     hideOverlay();
 }

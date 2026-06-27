@@ -16,7 +16,7 @@ from anidub.config import get_ffmpeg_location
 
 app = Flask(__name__)
 _anime: AnimeProject | None = None
-_progress: dict = {}  # {key: {current: int, total: int, done: bool, message: str}}
+_progress: dict = {}
 
 
 def _require_anime():
@@ -156,30 +156,34 @@ def api_timeline():
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    regions = proj.get_timeline_regions()
+    clips = proj.get_timeline_clips()
     return jsonify([
         {
-            "start_sec": r.start_sec,
-            "end_sec": r.end_sec,
-            "kind": r.kind,
-            "clip_index": r.clip_index,
-            "status": r.status.value if r.status else None,
-            "duration": r.end_sec - r.start_sec,
+            "clip_id": c["clip_id"],
+            "start_sec": c["start_sec"],
+            "end_sec": c["end_sec"],
+            "duration": c["end_sec"] - c["start_sec"],
+            "audio_offset_ms": c.get("audio_offset_ms", 0.0),
+            "status": c.get("status", "pending"),
+            "original_text": c["original_text"],
+            "translated_text": c.get("translated_text"),
+            "character": c.get("character"),
         }
-        for r in regions
+        for c in clips
     ])
 
 
 # ── Clip CRUD ─────────────────────────────────
 
 def _clip_to_dict(clip):
+    proj = _anime.get_active_project()
     d = {
-        "index": clip.index,
+        "clip_id": clip.clip_id,
         "start_sec": clip.start_sec,
         "end_sec": clip.end_sec,
         "original_text": clip.original_text,
         "translated_text": clip.translated_text,
-        "offset_ms": clip.offset_ms,
+        "audio_offset_ms": clip.audio_offset_ms,
         "character": clip.character,
         "character_mood": clip.character_mood,
         "ref_source": clip.ref_source.value,
@@ -191,21 +195,20 @@ def _clip_to_dict(clip):
         "instruct_extra": clip.instruct_extra,
         "speed_factor": clip.speed_factor,
         "pronunciation_override": clip.pronunciation_override,
-        "can_clone": clip.status != ClipStatus.NON_DUB,
+        "can_clone": clip.status not in (ClipStatus.NON_DUB, ClipStatus.SIGN),
     }
-    proj = _anime.get_active_project()
-    d["needs_processing"] = proj.needs_processing(clip.index)
+    d["needs_processing"] = proj.needs_processing(clip.clip_id)
     return d
 
 
-@app.route("/api/clips/<int:n>")
-def api_get_clip(n):
+@app.route("/api/clips/<clip_id>")
+def api_get_clip(clip_id):
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    clip = proj.get_clip(n)
+    clip = proj.get_clip(clip_id)
     if not clip:
-        return jsonify({"error": f"Clip {n} not found"}), 404
+        return jsonify({"error": f"Clip {clip_id} not found"}), 404
     return jsonify(_clip_to_dict(clip))
 
 
@@ -216,126 +219,159 @@ def api_current_clip():
     proj = _anime.get_active_project()
     clip = proj.get_current_clip()
     if not clip:
-        return jsonify({"error": "No current clip"}), 404
+        order = proj.state.get("order", [])
+        if order:
+            clip = proj.get_clip(order[0])
+    if not clip:
+        return jsonify({"error": "No clips"}), 404
     return jsonify(_clip_to_dict(clip))
 
 
-@app.route("/api/clips/<int:n>/translate", methods=["POST"])
-def api_translate(n):
+@app.route("/api/clips/<clip_id>/translate", methods=["POST"])
+def api_translate(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
     override = data.get("text_override")
     proj = _anime.get_active_project()
-    text = proj.translate_clip(n, text_override=override if override else None)
+    text = proj.translate_clip(clip_id, text_override=override if override else None)
     return jsonify({"translated_text": text})
 
 
-@app.route("/api/clips/<int:n>/clone", methods=["POST"])
-def api_clone(n):
+@app.route("/api/clips/<clip_id>/clone", methods=["POST"])
+def api_clone(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
     character = data.get("character") or None
     mood = data.get("mood", "normal")
     proj = _anime.get_active_project()
-    result = proj.clone_clip(n, character=character, mood=mood)
+    result = proj.clone_clip(clip_id, character=character, mood=mood)
     return jsonify({
         "inference_ms": result.get("inference_ms"),
         "output_duration": result.get("output_duration"),
     })
 
 
-@app.route("/api/clips/<int:n>/preview", methods=["POST"])
-def api_preview(n):
+@app.route("/api/clips/<clip_id>/preview", methods=["POST"])
+def api_preview(clip_id):
     err = _require_project()
     if err: return err
-    _anime.get_active_project().preview_clip(n)
-    return jsonify({"url": f"/preview/{n:03d}.mp4"})
+    _anime.get_active_project().preview_clip(clip_id)
+    return jsonify({"url": f"/preview/{clip_id}.mp4"})
 
 
-@app.route("/api/clips/<int:n>/offset", methods=["POST"])
-def api_offset(n):
+@app.route("/api/clips/<clip_id>/audio-offset", methods=["POST"])
+def api_audio_offset(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
-    _anime.get_active_project().set_clip_offset(n, data.get("offset_ms", 0.0))
+    _anime.get_active_project().set_audio_offset(clip_id, data.get("offset_ms", 0.0))
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/character", methods=["POST"])
-def api_character(n):
+@app.route("/api/clips/<clip_id>/character", methods=["POST"])
+def api_character(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
     char = data.get("character") or None
     mood = data.get("mood", "normal")
-    _anime.get_active_project().set_clip_character(n, char, mood)
+    _anime.get_active_project().set_clip_character(clip_id, char, mood)
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/instruct", methods=["POST"])
-def api_instruct(n):
+@app.route("/api/clips/<clip_id>/instruct", methods=["POST"])
+def api_instruct(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
     extra = data.get("instruct_extra") or None
-    _anime.get_active_project().set_instruct_extra(n, extra)
+    _anime.get_active_project().set_instruct_extra(clip_id, extra)
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/process", methods=["POST"])
-def api_process(n):
+@app.route("/api/clips/<clip_id>/process", methods=["POST"])
+def api_process(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
     character = data.get("character") or None
     mood = data.get("mood", "normal")
     proj = _anime.get_active_project()
-    result = proj.process_clip(n, character=character, mood=mood)
+    result = proj.process_clip(clip_id, character=character, mood=mood)
     return jsonify(result)
 
 
-@app.route("/api/clips/<int:n>/speed", methods=["POST"])
-def api_speed(n):
+@app.route("/api/clips/<clip_id>/speed", methods=["POST"])
+def api_speed(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
-    _anime.get_active_project().set_clip_speed(n, data.get("speed_factor", 1.0))
+    _anime.get_active_project().set_clip_speed(clip_id, data.get("speed_factor", 1.0))
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/pronunciation", methods=["POST"])
-def api_pronunciation(n):
+@app.route("/api/clips/<clip_id>/pronunciation", methods=["POST"])
+def api_pronunciation(clip_id):
     err = _require_project()
     if err: return err
     data = request.get_json(silent=True) or {}
-    _anime.get_active_project().set_clip_pronunciation(n, data.get("pronunciation_override") or None)
+    _anime.get_active_project().set_clip_pronunciation(clip_id, data.get("pronunciation_override") or None)
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/accept", methods=["POST"])
-def api_accept(n):
+@app.route("/api/clips/<clip_id>/accept", methods=["POST"])
+def api_accept(clip_id):
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    proj.accept_clip(n)
+    proj.accept_clip(clip_id)
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/reject", methods=["POST"])
-def api_reject(n):
+@app.route("/api/clips/<clip_id>/reject", methods=["POST"])
+def api_reject(clip_id):
     err = _require_project()
     if err: return err
-    _anime.get_active_project().reject_clip(n)
+    _anime.get_active_project().reject_clip(clip_id)
     return jsonify({"ok": True})
 
 
-@app.route("/api/clips/<int:n>/reset", methods=["POST"])
-def api_reset(n):
+@app.route("/api/clips/<clip_id>/reset", methods=["POST"])
+def api_reset(clip_id):
     err = _require_project()
     if err: return err
-    _anime.get_active_project().reset_clip(n)
+    _anime.get_active_project().reset_clip(clip_id)
+    return jsonify({"ok": True})
+
+
+# ── Timeline editing ──────────────────────────
+
+@app.route("/api/clips/<clip_id>/resize", methods=["POST"])
+def api_resize(clip_id):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    proj = _anime.get_active_project()
+    proj.resize_clip(clip_id, data.get("start_sec", 0.0), data.get("end_sec", 0.0))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/clips/<clip_id>/delete", methods=["POST"])
+def api_delete(clip_id):
+    err = _require_project()
+    if err: return err
+    _anime.get_active_project().delete_clip(clip_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/clips/<clip_id>/status", methods=["POST"])
+def api_clip_status(clip_id):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    _anime.get_active_project().set_clip_status(clip_id, data.get("status", "pending"))
     return jsonify({"ok": True})
 
 
@@ -346,23 +382,23 @@ def api_translate_all():
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    total = proj.get_clip_count()
+    order = list(proj.state.get("order", []))
+    total = len(order)
     key = "translate-all"
 
     def _run():
         processed = 0
         _progress[key] = {"current": 0, "total": total, "done": False, "message": "Translating..."}
-        proj.state["timeline"]  # ensure initialized
-        for i in range(1, total + 1):
-            clip = proj.get_clip(i)
+        for idx, cid in enumerate(order):
+            clip = proj.get_clip(cid)
             if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
                 try:
-                    proj.translate_clip(i)
+                    proj.translate_clip(cid)
                     processed += 1
                 except Exception:
                     pass
-            _progress[key]["current"] = i
-            _progress[key]["message"] = f"Translating clip {i}/{total}"
+            _progress[key]["current"] = idx + 1
+            _progress[key]["message"] = f"Translating clip {idx + 1}/{total}"
         _progress[key]["done"] = True
         _progress[key]["message"] = f"Translated {processed}/{total}"
 
@@ -380,7 +416,8 @@ def api_clone_all():
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    total = proj.get_clip_count()
+    order = list(proj.state.get("order", []))
+    total = len(order)
     key = "clone-all"
 
     def _run():
@@ -395,25 +432,26 @@ def api_clone_all():
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
             processed = 0
             _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
-            for i in range(1, total + 1):
-                clip = proj.get_clip(i)
+            for idx, cid in enumerate(order):
+                clip = proj.get_clip(cid)
                 if clip and clip.status in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
                     if clip.status == ClipStatus.REJECTED and not clip.translated_text:
                         pass
                     else:
                         try:
-                            proj.clone_clip(i, character=clip.character, mood=clip.character_mood or "normal", backend=backend)
+                            proj.clone_clip(cid, character=clip.character,
+                                            mood=clip.character_mood or "normal", backend=backend)
                             processed += 1
                         except Exception as e:
                             if "timed out" in str(e):
-                                _progress[key]["message"] = f"Timeout on clip {i} — recreating TTS backend..."
+                                _progress[key]["message"] = f"Timeout on clip {cid} — recreating TTS backend..."
                                 time.sleep(30)
                                 del backend
                                 if torch.cuda.is_available():
                                     torch.cuda.empty_cache()
                                 backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
-                _progress[key]["current"] = i
-                _progress[key]["message"] = f"Cloning clip {i}/{total}"
+                _progress[key]["current"] = idx + 1
+                _progress[key]["message"] = f"Cloning clip {idx + 1}/{total}"
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             _progress[key]["done"] = True
@@ -452,13 +490,13 @@ def api_characters_save():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
     mood = data.get("mood", "normal")
-    clip_index = data.get("clip_index")
-    if not clip_index:
-        return jsonify({"error": "clip_index required"}), 400
+    clip_id = data.get("clip_id")
+    if not clip_id:
+        return jsonify({"error": "clip_id required"}), 400
     proj = _anime.get_active_project()
-    src = proj.path / "lines" / f"{clip_index:03d}" / "ref.wav"
+    src = proj.path / "lines" / clip_id / "ref.wav"
     if not src.exists():
-        return jsonify({"error": f"ref.wav not found for clip {clip_index}"}), 404
+        return jsonify({"error": f"ref.wav not found for clip {clip_id}"}), 404
     dst = _anime.save_character_clip(name, src, mood)
     return jsonify({"path": str(dst)})
 
@@ -592,6 +630,7 @@ def api_preview_raw():
 
     return _send_file_range(tmp.name, "video/mp4")
 
+
 @app.route("/api/assemble", methods=["POST"])
 def api_assemble():
     err = _require_project()
@@ -609,15 +648,12 @@ def api_stats():
 
 # ── Static preview files ──────────────────────
 
-@app.route("/preview/<filename>")
-def serve_preview(filename):
+@app.route("/preview/<clip_id>.mp4")
+def serve_preview(clip_id):
     err = _require_project()
     if err: return err
-    parts = filename.replace(".mp4", "").lstrip("0")
-    idx = int(parts) if parts else 1
     proj = _anime.get_active_project()
-    line_dir = proj.path / "lines" / f"{idx:03d}"
-    preview = line_dir / "preview.mp4"
+    preview = proj.path / "lines" / clip_id / "preview.mp4"
     if not preview.exists():
         return jsonify({"error": "Preview not found — clone and preview first"}), 404
 
@@ -635,8 +671,7 @@ def serve_preview(filename):
                 f.seek(start)
                 data = f.read(length)
             return Response(
-                data, 206,
-                mimetype="video/mp4",
+                data, 206, mimetype="video/mp4",
                 headers={
                     "Content-Range": f"bytes {start}-{end}/{file_size}",
                     "Accept-Ranges": "bytes",

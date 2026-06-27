@@ -30,6 +30,7 @@ class ClipStatus(str, Enum):
     REJECTED = "rejected"
     SKIPPED = "skipped"
     NON_DUB = "non_dub"
+    SIGN = "sign"
 
 
 class RefSource(str, Enum):
@@ -41,19 +42,19 @@ class RefSource(str, Enum):
 class TimelineRegion:
     start_sec: float
     end_sec: float
-    kind: str  # "op", "ed", "clip", "gap"
-    clip_index: int | None = None
+    kind: str
+    clip_id: str | None = None
     status: ClipStatus | None = None
 
 
 @dataclass
 class ClipState:
-    index: int
+    clip_id: str
     start_sec: float
     end_sec: float
     original_text: str
     translated_text: str | None = None
-    offset_ms: float = 0.0
+    audio_offset_ms: float = 0.0
     character: str | None = None
     character_mood: str | None = None
     ref_source: RefSource = RefSource.CLIP
@@ -65,6 +66,10 @@ class ClipState:
     instruct_extra: str | None = None
     speed_factor: float = 1.0
     pronunciation_override: str | None = None
+
+    @property
+    def display_index(self) -> int:
+        return int(self.clip_id[1:])
 
 
 class Project:
@@ -90,7 +95,7 @@ class Project:
         result = decompose_mkv(mkv_path, pd.path)
 
         pd.state = {
-            "version": 1,
+            "version": 2,
             "source": {
                 "mkv_path": str(mkv_path.resolve()),
                 "audio_track_rel": 0,
@@ -123,9 +128,11 @@ class Project:
             "demucs_done": False,
             "op_range": [0.0, 0.0],
             "ed_range": [0.0, 0.0],
-            "timeline": [],
+            "clips": {},
+            "order": [],
+            "next_clip_id": 0,
             "characters": {},
-            "selected_clip_index": None,
+            "selected_clip_id": None,
         }
         pd.save()
         return pd
@@ -138,11 +145,51 @@ class Project:
             raise FileNotFoundError(f"project.json not found in {pd.path}")
         with pj.open("r", encoding="utf-8") as f:
             pd.state = json.load(f)
+        pd._migrate_if_needed()
         return pd
 
     def save(self):
         with (self.path / "project.json").open("w", encoding="utf-8") as f:
             json.dump(self.state, f, indent=2, ensure_ascii=False)
+
+    def _migrate_if_needed(self):
+        if self.state.get("clips") is not None:
+            return
+        old_tl = self.state.get("timeline", [])
+        if not old_tl:
+            self.state["clips"] = {}
+            self.state["order"] = []
+            self.state["next_clip_id"] = 0
+            self.state.pop("selected_clip_index", None)
+            self.state["selected_clip_id"] = None
+            self.state.pop("timeline", None)
+            self.save()
+            return
+
+        clips = {}
+        order = []
+        max_id = 0
+        for entry in old_tl:
+            idx = entry.get("index", len(order) + 1)
+            clip_id = f"c{idx:04d}"
+            max_id = max(max_id, idx)
+            entry.pop("index", None)
+            entry["clip_id"] = clip_id
+            entry.setdefault("audio_offset_ms", entry.pop("offset_ms", 0.0))
+            clips[clip_id] = entry
+            order.append(clip_id)
+
+        old_sel = self.state.pop("selected_clip_index", None)
+        if old_sel and 1 <= old_sel <= len(order):
+            self.state["selected_clip_id"] = order[old_sel - 1]
+        else:
+            self.state["selected_clip_id"] = order[0] if order else None
+
+        self.state["clips"] = clips
+        self.state["order"] = order
+        self.state["next_clip_id"] = max_id + 1
+        self.state.pop("timeline", None)
+        self.save()
 
     # ═══════════════════════════════════════════
     #  Internal helpers
@@ -174,8 +221,44 @@ class Project:
         self._ass_events = parse_ass(sub)
         return self._ass_events
 
+    def _next_clip_id(self) -> str:
+        nid = self.state.get("next_clip_id", 0)
+        if nid == 0:
+            existing = self.state.get("clips", {})
+            nid = max((int(cid[1:]) for cid in existing), default=0) + 1
+        cid = f"c{nid:04d}"
+        self.state["next_clip_id"] = nid + 1
+        return cid
+
+    def _new_clip_entry(self, start_sec: float, end_sec: float, text: str,
+                        status: str = "pending") -> dict:
+        return {
+            "clip_id": self._next_clip_id(),
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "original_text": text,
+            "translated_text": None,
+            "audio_offset_ms": 0.0,
+            "character": None,
+            "character_mood": None,
+            "ref_source": "clip",
+            "ref_clip": None,
+            "status": status,
+            "clone_path": None,
+            "clone_ms": None,
+            "attempts": 0,
+            "instruct_extra": None,
+            "speed_factor": 1.0,
+            "pronunciation_override": None,
+        }
+
+    def _ensure_clips_dict(self):
+        if "clips" not in self.state:
+            self._migrate_if_needed()
+
     def _init_timeline(self, force: bool = False):
-        if self.state.get("timeline") and not force:
+        self._ensure_clips_dict()
+        if self.state.get("order") and not force:
             return
         events = self._parse_ass()
         main = filter_dialogue(events)
@@ -197,87 +280,38 @@ class Project:
             clean = strip_override_tags(e["text"])
             if not clean:
                 continue
-            usable.append({"index": e["index"], "start_sec": e["start_sec"],
-                           "end_sec": e["end_sec"], "text": clean})
+            usable.append({"start_sec": e["start_sec"], "end_sec": e["end_sec"], "text": clean})
 
-        tl = []
-        idx = 0
+        clips = {}
+        order = []
+        pending_statuses = {"non_dub", "sign"}
 
         for e in op_events:
             clean = strip_override_tags(e["text"])
             if not clean:
                 continue
-            idx += 1
-            tl.append({
-                "index": idx,
-                "start_sec": e["start_sec"],
-                "end_sec": e["end_sec"],
-                "original_text": clean,
-                "translated_text": None,
-                "offset_ms": 0.0,
-                "character": None,
-                "character_mood": None,
-                "ref_source": "clip",
-                "ref_clip": None,
-                "status": "non_dub",
-                "clone_path": None,
-                "clone_ms": None,
-                "attempts": 0,
-                "instruct_extra": None,
-                "speed_factor": 1.0,
-                "pronunciation_override": None,
-            })
+            entry = self._new_clip_entry(e["start_sec"], e["end_sec"], clean, status="non_dub")
+            clips[entry["clip_id"]] = entry
+            order.append(entry["clip_id"])
 
-        for i, u in enumerate(usable):
-            idx += 1
-            tl.append({
-                "index": idx,
-                "start_sec": u["start_sec"],
-                "end_sec": u["end_sec"],
-                "original_text": u["text"],
-                "translated_text": None,
-                "offset_ms": 0.0,
-                "character": None,
-                "character_mood": None,
-                "ref_source": "clip",
-                "ref_clip": None,
-                "status": "pending",
-                "clone_path": None,
-                "clone_ms": None,
-                "attempts": 0,
-                "instruct_extra": None,
-                "speed_factor": 1.0,
-                "pronunciation_override": None,
-            })
+        for u in usable:
+            entry = self._new_clip_entry(u["start_sec"], u["end_sec"], u["text"], status="pending")
+            clips[entry["clip_id"]] = entry
+            order.append(entry["clip_id"])
 
         for e in ed_events:
             clean = strip_override_tags(e["text"])
             if not clean:
                 continue
-            idx += 1
-            tl.append({
-                "index": idx,
-                "start_sec": e["start_sec"],
-                "end_sec": e["end_sec"],
-                "original_text": clean,
-                "translated_text": None,
-                "offset_ms": 0.0,
-                "character": None,
-                "character_mood": None,
-                "ref_source": "clip",
-                "ref_clip": None,
-                "status": "non_dub",
-                "clone_path": None,
-                "clone_ms": None,
-                "attempts": 0,
-                "instruct_extra": None,
-                "speed_factor": 1.0,
-                "pronunciation_override": None,
-            })
+            entry = self._new_clip_entry(e["start_sec"], e["end_sec"], clean, status="non_dub")
+            clips[entry["clip_id"]] = entry
+            order.append(entry["clip_id"])
 
-        self.state["timeline"] = tl
-        if tl:
-            self.state["selected_clip_index"] = 1
+        self.state["clips"] = clips
+        self.state["order"] = order
+        if order:
+            self.state["selected_clip_id"] = order[0]
+        self.save()
 
     # ═══════════════════════════════════════════
     #  Setup
@@ -334,51 +368,30 @@ class Project:
             return 0.0, 0.0
         return events[0]["start_sec"], events[-1]["end_sec"]
 
-    def get_timeline_regions(self) -> list[TimelineRegion]:
+    def get_timeline_clips(self) -> list[dict]:
         self._init_timeline()
-        tl = self.state.get("timeline", [])
-        if not tl:
-            return []
-
-        regions: list[TimelineRegion] = []
-        prev_end = 0.0
-
-        for clip in tl:
-            cs = clip["start_sec"]
-            ce = clip["end_sec"]
-            if ce <= prev_end:
-                continue
-            gap = cs - prev_end
-            if gap > 2.0 and prev_end > 0:
-                regions.append(TimelineRegion(prev_end, cs, "gap"))
-            regions.append(TimelineRegion(
-                cs, ce, "clip",
-                clip_index=clip["index"],
-                status=ClipStatus(clip["status"]),
-            ))
-            prev_end = ce
-
-        return regions
+        clips = self.state.get("clips", {})
+        return [clips[cid] for cid in self.state.get("order", []) if cid in clips]
 
     # ═══════════════════════════════════════════
     #  Clip navigation
     # ═══════════════════════════════════════════
 
-    def get_clip(self, index: int) -> ClipState | None:
+    def get_clip(self, clip_id: str) -> ClipState | None:
         self._init_timeline()
-        tl = self.state.get("timeline", [])
-        if 1 <= index <= len(tl):
-            return self._to_clip_state(tl[index - 1])
+        entry = self.state.get("clips", {}).get(clip_id)
+        if entry:
+            return self._to_clip_state(entry)
         return None
 
     def _to_clip_state(self, entry: dict) -> ClipState:
         return ClipState(
-            index=entry["index"],
+            clip_id=entry["clip_id"],
             start_sec=entry["start_sec"],
             end_sec=entry["end_sec"],
             original_text=entry["original_text"],
             translated_text=entry.get("translated_text"),
-            offset_ms=entry.get("offset_ms", 0.0),
+            audio_offset_ms=entry.get("audio_offset_ms", 0.0),
             character=entry.get("character"),
             character_mood=entry.get("character_mood"),
             ref_source=RefSource(entry.get("ref_source", "clip")),
@@ -393,47 +406,105 @@ class Project:
         )
 
     def get_current_clip(self) -> ClipState | None:
-        sel = self.state.get("selected_clip_index")
+        sel = self.state.get("selected_clip_id")
         return self.get_clip(sel) if sel else None
 
-    def get_next_clip(self) -> ClipState | None:
-        sel = self.state.get("selected_clip_index")
-        if not sel:
-            return self.get_clip(1)
-        return self.get_clip(sel + 1)
-
-    def get_prev_clip(self) -> ClipState | None:
-        sel = self.state.get("selected_clip_index")
-        if not sel:
+    def get_next_clip(self, clip_id: str | None = None) -> ClipState | None:
+        if clip_id is None:
+            clip_id = self.state.get("selected_clip_id")
+        if not clip_id:
             return None
-        return self.get_clip(sel - 1)
+        order = self.state.get("order", [])
+        try:
+            idx = order.index(clip_id)
+        except ValueError:
+            return None
+        for nxt in order[idx + 1:]:
+            if nxt in self.state.get("clips", {}):
+                return self._to_clip_state(self.state["clips"][nxt])
+        return None
 
-    def select_clip(self, index: int):
+    def get_prev_clip(self, clip_id: str | None = None) -> ClipState | None:
+        if clip_id is None:
+            clip_id = self.state.get("selected_clip_id")
+        if not clip_id:
+            return None
+        order = self.state.get("order", [])
+        try:
+            idx = order.index(clip_id)
+        except ValueError:
+            return None
+        for prv in reversed(order[:idx]):
+            if prv in self.state.get("clips", {}):
+                return self._to_clip_state(self.state["clips"][prv])
+        return None
+
+    def select_clip(self, clip_id: str):
         self._init_timeline()
-        tl = self.state["timeline"]
-        if 1 <= index <= len(tl):
-            self.state["selected_clip_index"] = index
+        if clip_id in self.state.get("clips", {}):
+            self.state["selected_clip_id"] = clip_id
             self.save()
 
     def seek_clip(self, time_sec: float) -> ClipState | None:
         self._init_timeline()
-        for entry in self.state.get("timeline", []):
-            if entry["start_sec"] <= time_sec < entry["end_sec"]:
-                self.state["selected_clip_index"] = entry["index"]
+        for cid in self.state.get("order", []):
+            entry = self.state.get("clips", {}).get(cid)
+            if entry and entry["start_sec"] <= time_sec < entry["end_sec"]:
+                self.state["selected_clip_id"] = cid
                 self.save()
                 return self._to_clip_state(entry)
         return None
 
     def get_clip_count(self) -> int:
         self._init_timeline()
-        return len(self.state.get("timeline", []))
+        return len(self.state.get("order", []))
+
+    # ═══════════════════════════════════════════
+    #  Clip editing (new timeline features)
+    # ═══════════════════════════════════════════
+
+    def resize_clip(self, clip_id: str, start_sec: float, end_sec: float):
+        entry = self._get_clip_entry(clip_id)
+        entry["start_sec"] = max(0.0, start_sec)
+        entry["end_sec"] = max(entry["start_sec"] + 0.1, end_sec)
+        self._resort_order()
+        self.save()
+
+    def delete_clip(self, clip_id: str):
+        clips = self.state.get("clips", {})
+        order = self.state.get("order", [])
+        if clip_id not in clips:
+            return
+        del clips[clip_id]
+        if clip_id in order:
+            order.remove(clip_id)
+        if self.state.get("selected_clip_id") == clip_id:
+            self.state["selected_clip_id"] = order[0] if order else None
+        self.save()
+
+    def set_audio_offset(self, clip_id: str, offset_ms: float):
+        entry = self._get_clip_entry(clip_id)
+        entry["audio_offset_ms"] = offset_ms
+        self.save()
+
+    def set_clip_status(self, clip_id: str, status: str):
+        entry = self._get_clip_entry(clip_id)
+        entry["status"] = ClipStatus(status).value
+        self.save()
+
+    def _resort_order(self):
+        clips = self.state.get("clips", {})
+        self.state["order"] = sorted(
+            self.state.get("order", []),
+            key=lambda cid: clips.get(cid, {}).get("start_sec", 0.0),
+        )
 
     # ═══════════════════════════════════════════
     #  Per-clip operations
     # ═══════════════════════════════════════════
 
-    def translate_clip(self, index: int, text_override: str | None = None) -> str:
-        entry = self._get_clip_entry(index)
+    def translate_clip(self, clip_id: str, text_override: str | None = None) -> str:
+        entry = self._get_clip_entry(clip_id)
         if text_override:
             entry["translated_text"] = text_override
             entry["status"] = ClipStatus.TRANSLATED.value
@@ -454,17 +525,17 @@ class Project:
         self.save()
         return entry["translated_text"]
 
-    def clone_clip(self, index: int, *,
+    def clone_clip(self, clip_id: str, *,
                    character: str | None = None,
                    mood: str = "normal",
                    instruct: str | None = None,
                    backend=None) -> dict:
-        entry = self._get_clip_entry(index)
-        if entry.get("status") == ClipStatus.NON_DUB.value:
-            return {"error": "Cannot clone non-dub (OP/ED/gap) clips"}
+        entry = self._get_clip_entry(clip_id)
+        if entry.get("status") in (ClipStatus.NON_DUB.value, ClipStatus.SIGN.value):
+            return {"error": "Cannot clone non-dub or sign clips"}
         entry["status"] = ClipStatus.CLONING.value
         if character:
-            self.set_clip_character(index, character, mood)
+            self.set_clip_character(clip_id, character, mood)
 
         from anidub.pipeline import clone_line
         from anidub.esperanto import build_instruct_prompt
@@ -475,7 +546,7 @@ class Project:
         if not no_vocals_cache.exists():
             self.run_demucs()
 
-        line_dir = self.path / "lines" / f"{index:03d}"
+        line_dir = self.path / "lines" / clip_id
         line_dir.mkdir(parents=True, exist_ok=True)
 
         ref_wav = line_dir / "ref.wav"
@@ -484,7 +555,7 @@ class Project:
         else:
             extract_ref_clip_from_wav(
                 audio, entry["start_sec"],
-                next_line_start=self._next_line_start(index),
+                next_line_start=self._next_line_start(clip_id),
                 out_path=ref_wav,
             )
 
@@ -513,10 +584,10 @@ class Project:
         self.save()
         return result
 
-    def preview_clip(self, index: int) -> Path:
-        entry = self._get_clip_entry(index)
+    def preview_clip(self, clip_id: str) -> Path:
+        entry = self._get_clip_entry(clip_id)
         if not entry.get("clone_path"):
-            raise RuntimeError(f"Clip {index} has not been cloned yet")
+            raise RuntimeError(f"Clip {clip_id} has not been cloned yet")
 
         from anidub.assembler import preview_clip as _preview_clip
 
@@ -526,30 +597,28 @@ class Project:
 
         tts_wav = self._abs(entry["clone_path"])
         sub_ass = self._sub_path()
-        line_dir = self.path / "lines" / f"{index:03d}"
+        line_dir = self.path / "lines" / clip_id
         line_dir.mkdir(parents=True, exist_ok=True)
 
+        offset_ms = entry.get("audio_offset_ms", 0.0)
         return _preview_clip(
             video_only=self._abs(self.state["video_only"]),
             no_vocals=no_vocals_cache,
             tts_wav=tts_wav,
             ass_path=sub_ass,
-            line_index=index,
+            line_index=entry["clip_id"],
             start_sec=entry["start_sec"],
             end_sec=entry["end_sec"],
             text=entry.get("translated_text") or entry["original_text"],
-            offset_ms=entry.get("offset_ms", 0.0),
+            offset_ms=offset_ms,
             out_dir=line_dir,
         )
 
-    def set_clip_offset(self, index: int, offset_ms: float):
-        entry = self._get_clip_entry(index)
-        dur = entry["end_sec"] - entry["start_sec"]
-        entry["offset_ms"] = max(-dur * 1000, min(dur * 1000, offset_ms))
-        self.save()
+    def set_clip_offset(self, clip_id: str, offset_ms: float):
+        self.set_audio_offset(clip_id, offset_ms)
 
-    def set_clip_character(self, index: int, character: str | None, mood: str = "normal"):
-        entry = self._get_clip_entry(index)
+    def set_clip_character(self, clip_id: str, character: str | None, mood: str = "normal"):
+        entry = self._get_clip_entry(clip_id)
         entry["character"] = character
         entry["character_mood"] = mood
         if character and get_character_clip(self._chars_dir, character, mood):
@@ -561,43 +630,43 @@ class Project:
             entry["ref_clip"] = None
         self.save()
 
-    def set_clip_speed(self, index: int, speed_factor: float):
-        entry = self._get_clip_entry(index)
+    def set_clip_speed(self, clip_id: str, speed_factor: float):
+        entry = self._get_clip_entry(clip_id)
         entry["speed_factor"] = max(0.5, min(2.0, speed_factor))
         self.save()
 
-    def set_clip_pronunciation(self, index: int, pronunciation_override: str | None):
-        entry = self._get_clip_entry(index)
+    def set_clip_pronunciation(self, clip_id: str, pronunciation_override: str | None):
+        entry = self._get_clip_entry(clip_id)
         entry["pronunciation_override"] = pronunciation_override if pronunciation_override and pronunciation_override.strip() else None
         self.save()
 
-    def set_instruct_extra(self, index: int, instruct_extra: str | None):
-        entry = self._get_clip_entry(index)
+    def set_instruct_extra(self, clip_id: str, instruct_extra: str | None):
+        entry = self._get_clip_entry(clip_id)
         entry["instruct_extra"] = instruct_extra
         self.save()
 
-    def accept_clip(self, index: int):
-        entry = self._get_clip_entry(index)
-        if entry.get("status") == ClipStatus.NON_DUB.value:
+    def accept_clip(self, clip_id: str):
+        entry = self._get_clip_entry(clip_id)
+        if entry.get("status") in (ClipStatus.NON_DUB.value, ClipStatus.SIGN.value):
             return
         entry["status"] = ClipStatus.ACCEPTED.value
         self._append_line_to_ass(entry)
         self.save()
 
-    def reject_clip(self, index: int):
-        entry = self._get_clip_entry(index)
-        if entry.get("status") == ClipStatus.NON_DUB.value:
+    def reject_clip(self, clip_id: str):
+        entry = self._get_clip_entry(clip_id)
+        if entry.get("status") in (ClipStatus.NON_DUB.value, ClipStatus.SIGN.value):
             return
         entry["status"] = ClipStatus.REJECTED.value
         self.save()
 
-    def reset_clip(self, index: int):
-        entry = self._get_clip_entry(index)
+    def reset_clip(self, clip_id: str):
+        entry = self._get_clip_entry(clip_id)
         entry["status"] = ClipStatus.PENDING.value
         entry["translated_text"] = None
         entry["clone_path"] = None
         entry["clone_ms"] = None
-        entry["offset_ms"] = 0.0
+        entry["audio_offset_ms"] = 0.0
         entry["ref_source"] = RefSource.CLIP.value
         entry["ref_clip"] = None
         entry["speed_factor"] = 1.0
@@ -608,42 +677,46 @@ class Project:
     #  Bulk operations
     # ═══════════════════════════════════════════
 
-    def translate_range(self, start: int, end: int | None = None):
-        end = end or self.get_clip_count()
-        for i in range(start, end + 1):
-            clip = self.get_clip(i)
+    def translate_all(self):
+        for cid in self.state.get("order", []):
+            clip = self.get_clip(cid)
             if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
-                self.translate_clip(i)
+                self.translate_clip(cid)
 
-    def clone_range(self, start: int, end: int | None = None, character: str | None = None, backend=None):
-        end = end or self.get_clip_count()
-        for i in range(start, end + 1):
-            clip = self.get_clip(i)
+    def clone_range(self, start: int | None = None, end: int | None = None,
+                    character: str | None = None, backend=None):
+        order = self.state.get("order", [])
+        if start is not None and end is not None:
+            ids = order[start - 1:end]
+        else:
+            ids = order
+        for cid in ids:
+            clip = self.get_clip(cid)
             if not clip or clip.status not in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
                 continue
             if clip.status == ClipStatus.REJECTED and not clip.translated_text:
                 continue
             if character or clip.character:
-                self.clone_clip(i, character=character or clip.character,
+                self.clone_clip(cid, character=character or clip.character,
                                 mood=clip.character_mood or "normal",
                                 backend=backend)
             else:
-                self.clone_clip(i, backend=backend)
+                self.clone_clip(cid, backend=backend)
 
     def accept_all(self):
-        for i in range(1, self.get_clip_count() + 1):
-            clip = self.get_clip(i)
+        for cid in self.state.get("order", []):
+            clip = self.get_clip(cid)
             if clip and clip.status == ClipStatus.CLONED:
-                self.accept_clip(i)
+                self.accept_clip(cid)
 
     def get_stats(self) -> dict:
         self._init_timeline()
-        tl = self.state.get("timeline", [])
+        clips = self.state.get("clips", {})
         counts = {s.value: 0 for s in ClipStatus}
-        for t in tl:
-            st = t.get("status", "pending")
+        for entry in clips.values():
+            st = entry.get("status", "pending")
             counts[st] = counts.get(st, 0) + 1
-        return {"total": len(tl), **counts}
+        return {"total": len(clips), **counts}
 
     # ═══════════════════════════════════════════
     #  Character bank
@@ -692,13 +765,11 @@ class Project:
         header = get_ass_header(sub)
         with eo_ass.open("w", encoding="utf-8") as f:
             f.write(header + "\n")
-            for entry in self.state.get("timeline", []):
+            for entry in self._sorted_clips():
                 text = entry.get("translated_text") or entry["original_text"]
-                ts = (
-                    f"{entry['start_sec']:.2f},{entry['end_sec']:.2f}"
-                    .replace(".", ":").replace(":", ".", 1).replace(",", ":", 1)
-                )
-                f.write(f"Dialogue: 0,{ts},main,,0000,0000,0000,,{text}\n")
+                style = "sign" if entry.get("status") == ClipStatus.SIGN.value else "main"
+                ts = self._sec_to_ass_ts(entry["start_sec"], entry["end_sec"])
+                f.write(f"Dialogue: 0,{ts},{style},,0000,0000,0000,,{text}\n")
         return eo_ass
 
     def assemble_full(self) -> Path:
@@ -719,10 +790,10 @@ class Project:
             errors=self._collect_errors(),
         )
 
-    def needs_processing(self, index: int) -> bool:
-        entry = self._get_clip_entry(index)
+    def needs_processing(self, clip_id: str) -> bool:
+        entry = self._get_clip_entry(clip_id)
         status = entry.get("status", "pending")
-        if status in ("accepted", "non_dub", "skipped"):
+        if status in ("accepted", "non_dub", "skipped", "sign"):
             return False
         has_translation = bool(entry.get("translated_text"))
         has_clone = bool(entry.get("clone_path"))
@@ -734,10 +805,10 @@ class Project:
             return False
         return True
 
-    def process_clip(self, index: int, *,
+    def process_clip(self, clip_id: str, *,
                      character: str | None = None,
                      mood: str = "normal") -> dict:
-        entry = self._get_clip_entry(index)
+        entry = self._get_clip_entry(clip_id)
         result: dict = {"status": entry["status"]}
 
         if not entry.get("translated_text"):
@@ -754,43 +825,57 @@ class Project:
             result["status"] = entry["status"]
             self.save()
 
-        if entry.get("status") == ClipStatus.NON_DUB.value:
+        if entry.get("status") in (ClipStatus.NON_DUB.value, ClipStatus.SIGN.value):
             return result
 
         if not entry.get("clone_path") and entry.get("status") != ClipStatus.REJECTED.value:
-            self.clone_clip(index, character=character, mood=mood)
+            self.clone_clip(clip_id, character=character, mood=mood)
 
         if entry.get("clone_path"):
-            preview = self.preview_clip(index)
-            result["preview_url"] = f"/preview/{index:03d}.mp4"
+            preview = self.preview_clip(clip_id)
+            result["preview_url"] = f"/preview/{clip_id}.mp4"
 
         result["status"] = entry["status"]
         return result
+
     # ═══════════════════════════════════════════
 
-    def _get_clip_entry(self, index: int) -> dict:
+    def _get_clip_entry(self, clip_id: str) -> dict:
         self._init_timeline()
-        tl = self.state["timeline"]
-        if index < 1 or index > len(tl):
-            raise IndexError(f"Clip index {index} out of range 1..{len(tl)}")
-        return tl[index - 1]
+        entry = self.state.get("clips", {}).get(clip_id)
+        if entry is None:
+            raise IndexError(f"Clip {clip_id} not found")
+        return entry
 
-    def _next_line_start(self, index: int) -> float | None:
-        tl = self.state.get("timeline", [])
-        if index < len(tl):
-            return tl[index]["start_sec"]
+    def _next_line_start(self, clip_id: str) -> float | None:
+        order = self.state.get("order", [])
+        clips = self.state.get("clips", {})
+        try:
+            idx = order.index(clip_id)
+        except ValueError:
+            return None
+        for nid in order[idx + 1:]:
+            if nid in clips:
+                return clips[nid]["start_sec"]
         return None
+
+    def _sorted_clips(self):
+        return sorted(
+            self.state.get("clips", {}).values(),
+            key=lambda e: e["start_sec"],
+        )
 
     def _append_line_to_ass(self, entry: dict):
         lines_dir = self.path / "lines"
         lines_dir.mkdir(parents=True, exist_ok=True)
         eo_ass = lines_dir / "_eo.ass"
         text = entry.get("translated_text") or entry["original_text"]
+        style = "sign" if entry.get("status") == ClipStatus.SIGN.value else "main"
         line = (
             f"Dialogue: 0,"
-            f"{self._fmt_ass_ts(entry['start_sec'])}," 
+            f"{self._fmt_ass_ts(entry['start_sec'])},"
             f"{self._fmt_ass_ts(entry['end_sec'])},"
-            f"main,,0000,0000,0000,,{text}\n"
+            f"{style},,0000,0000,0000,,{text}\n"
         )
         existing = []
         if eo_ass.exists():
@@ -818,6 +903,15 @@ class Project:
         return f"{h}:{m:02d}:{s:05.2f}"
 
     @staticmethod
+    def _sec_to_ass_ts(start_sec: float, end_sec: float) -> str:
+        def _fmt(s):
+            h = int(s // 3600)
+            m = int((s % 3600) // 60)
+            sec = s % 60
+            return f"{h}:{m:02d}:{sec:05.2f}"
+        return f"{_fmt(start_sec)},{_fmt(end_sec)}"
+
+    @staticmethod
     def _sort_key(line: str) -> float:
         if not line.startswith("Dialogue:"):
             return 0.0
@@ -833,15 +927,21 @@ class Project:
 
     def _collect_voiced_results(self) -> list[dict]:
         results = []
-        for entry in self.state.get("timeline", []):
-            if entry.get("status") not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value):
+        for entry in self._sorted_clips():
+            st = entry.get("status")
+            if st not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value) and st != ClipStatus.SIGN.value:
                 continue
-            if not entry.get("clone_path") and entry.get("status") != ClipStatus.NON_DUB.value:
+            if st == ClipStatus.SIGN.value:
                 continue
+            if not entry.get("clone_path") and st != ClipStatus.NON_DUB.value:
+                continue
+            audio_start = entry["start_sec"] + entry.get("audio_offset_ms", 0.0) / 1000.0
             results.append({
-                "line_index": entry["index"],
+                "line_index": entry.get("display_index", 0),
+                "clip_id": entry["clip_id"],
                 "start_sec": entry["start_sec"],
                 "end_sec": entry["end_sec"],
+                "audio_start_sec": audio_start,
                 "text": entry.get("translated_text") or entry["original_text"],
                 "tts_wav": str(self._abs(entry["clone_path"])) if entry.get("clone_path") else "",
                 "raw_dur": entry["end_sec"] - entry["start_sec"],
@@ -855,11 +955,12 @@ class Project:
 
     def _collect_errors(self) -> list[dict]:
         errors = []
-        for entry in self.state.get("timeline", []):
+        for entry in self.state.get("clips", {}).values():
             st = entry.get("status")
             if st in (ClipStatus.REJECTED.value, ClipStatus.SKIPPED.value):
                 errors.append({
-                    "line_index": entry["index"],
+                    "line_index": entry.get("display_index", 0),
+                    "clip_id": entry["clip_id"],
                     "text": entry.get("translated_text") or entry["original_text"],
                     "start_sec": entry["start_sec"],
                     "end_sec": entry["end_sec"],
@@ -960,6 +1061,7 @@ class AnimeProject:
                 try:
                     proj = Project(ep_dir)
                     proj.state = json.loads(pj.read_text(encoding="utf-8"))
+                    proj._migrate_if_needed()
                     proj._init_timeline()
                     stats = proj.get_stats()
                 except Exception:
@@ -1017,8 +1119,6 @@ class AnimeProject:
 
     def get_active_project(self) -> Project | None:
         return self._active
-
-    # Character bank (shared across episodes)
 
     def _chars_dir(self) -> Path:
         d = self.path / "characters"

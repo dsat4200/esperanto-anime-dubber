@@ -70,8 +70,8 @@
       </div>
 
       <div class="field">
-        <label>Pronunciation override (last resort — this text is spoken instead):</label>
-        <textarea id="pronunciation-text" rows="2" placeholder="Leave empty to use translation. Enter phonetic respelling or alternate Esperanto to fix pronunciation"></textarea>
+        <label>Pronunciation override:</label>
+        <textarea id="pronunciation-text" rows="2" placeholder="Leave empty to use translation"></textarea>
       </div>
 
       <div class="field">
@@ -91,11 +91,6 @@
       </div>
 
       <div class="field">
-        <label>Timing offset (<span id="offset-val">0</span>ms):</label>
-        <input type="range" id="offset-slider" min="-500" max="500" value="0" step="10" oninput="onOffsetChange(this.value)">
-      </div>
-
-      <div class="field">
         <label>Duration of dialogue (<span id="speed-val">1.00</span>x):</label>
         <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
       </div>
@@ -104,6 +99,7 @@
         <button class="primary" onclick="saveSettings()">Save settings</button>
         <button onclick="cloneCurrent()">Clone</button>
         <button onclick="previewCurrent()">Preview</button>
+        <button onclick="toggleSign()">Mark as Sign</button>
         <span id="clone-info"></span>
       </div>
 
@@ -137,7 +133,13 @@
 
 <!-- Timeline bar -->
 <div id="timeline-bar">
-  <div id="timeline-inner"></div>
+  <canvas id="timeline-canvas"></canvas>
+</div>
+
+<!-- Context menu -->
+<div id="timeline-menu" class="ctx-menu" style="display:none">
+  <div onclick="ctxDelete()">Delete clip</div>
+  <div onclick="ctxToggleSign()">Toggle sign/audio</div>
 </div>
 
 <!-- Status overlay -->
