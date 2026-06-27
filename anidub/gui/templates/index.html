@@ -65,16 +65,13 @@
         <label>Translation:</label>
         <textarea id="translation-text" rows="3"></textarea>
         <div class="btn-row">
-          <button onclick="translateCurrent()">Re-translate</button>
+          <button onclick="restoreTranslation()">Restore original translation</button>
         </div>
       </div>
 
       <div class="field">
         <label>Pronunciation override (last resort — this text is spoken instead):</label>
         <textarea id="pronunciation-text" rows="2" placeholder="Leave empty to use translation. Enter phonetic respelling or alternate Esperanto to fix pronunciation"></textarea>
-        <div class="btn-row">
-          <button onclick="savePronunciation()">Save override</button>
-        </div>
       </div>
 
       <div class="field">
@@ -91,9 +88,6 @@
       <div class="field">
         <label>Additional clone instructions:</label>
         <textarea id="instruct-extra" rows="2" placeholder="extra pronunciation / delivery notes for Esperanto TTS"></textarea>
-        <div class="btn-row">
-          <button onclick="saveInstruct()">Save instructions</button>
-        </div>
       </div>
 
       <div class="field">
@@ -107,7 +101,8 @@
       </div>
 
       <div class="field clone-only">
-        <button class="primary" onclick="cloneCurrent()">Clone</button>
+        <button class="primary" onclick="saveSettings()">Save settings</button>
+        <button onclick="cloneCurrent()">Clone</button>
         <button onclick="previewCurrent()">Preview</button>
         <span id="clone-info"></span>
       </div>

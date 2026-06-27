@@ -317,14 +317,13 @@ async function nextClip() {
     if (resp && !resp.error) loadClip(resp.index);
 }
 
-async function translateCurrent() {
+async function restoreTranslation() {
     const c = currentClip;
     if (!c) return;
     showOverlay('Translating...');
     try {
-        const override = document.getElementById('translation-text').value.trim() || undefined;
         const resp = await api(`/api/clips/${c.index}/translate`,
-            { method: 'POST', body: { text_override: override } });
+            { method: 'POST' });
         document.getElementById('translation-text').value = resp.translated_text;
         currentClip.translated_text = resp.translated_text;
         currentClip.status = 'translated';
@@ -334,6 +333,38 @@ async function translateCurrent() {
         alert('Translate failed: ' + e.message);
     }
     hideOverlay();
+}
+
+async function saveSettings() {
+    const c = currentClip;
+    if (!c) return;
+    const index = c.index;
+
+    const translation = document.getElementById('translation-text').value.trim() || undefined;
+    const pronunciation = document.getElementById('pronunciation-text').value.trim() || null;
+    const instructExtra = document.getElementById('instruct-extra').value.trim() || null;
+    const character = document.getElementById('char-select').value || null;
+    const mood = document.getElementById('mood-select').value || 'normal';
+    const offsetMs = parseFloat(document.getElementById('offset-slider').value);
+    const speedFactor = parseInt(document.getElementById('speed-slider').value) / 100;
+
+    await api(`/api/clips/${index}/translate`, { method: 'POST', body: { text_override: translation } });
+    await api(`/api/clips/${index}/pronunciation`, { method: 'POST', body: { pronunciation_override: pronunciation } });
+    await api(`/api/clips/${index}/instruct`, { method: 'POST', body: { instruct_extra: instructExtra } });
+    await api(`/api/clips/${index}/character`, { method: 'POST', body: { character, mood } });
+    await api(`/api/clips/${index}/offset`, { method: 'POST', body: { offset_ms: offsetMs } });
+    await api(`/api/clips/${index}/speed`, { method: 'POST', body: { speed_factor: speedFactor } });
+
+    currentClip.translated_text = translation;
+    currentClip.status = 'translated';
+    currentClip.pronunciation_override = pronunciation;
+    currentClip.instruct_extra = instructExtra;
+    currentClip.character = character;
+    currentClip.character_mood = mood;
+    currentClip.offset_ms = offsetMs;
+    currentClip.speed_factor = speedFactor;
+    renderClip();
+    loadTimeline();
 }
 
 async function cloneCurrent() {
@@ -394,15 +425,11 @@ async function acceptCurrent() {
     if (!c) return;
     if (c.needs_processing) await autoProcess(c.index);
     try {
-        const resp = await api(`/api/clips/${c.index}/accept`, { method: 'POST' });
+        await api(`/api/clips/${c.index}/accept`, { method: 'POST' });
         currentClip.status = 'accepted';
         loadTimeline();
         loadEpisodes();
-        if (resp.next_index) {
-            loadClip(resp.next_index);
-        } else if (resp.done) {
-            alert('All clips accepted!');
-        }
+        nextClip();
     } catch (e) {
         alert('Accept failed: ' + e.message);
     }
@@ -455,22 +482,6 @@ async function onCharacterChange() {
     currentClip.character = char;
     currentClip.character_mood = mood;
     renderClip();
-}
-
-async function saveInstruct() {
-    const c = currentClip;
-    if (!c) return;
-    const extra = document.getElementById('instruct-extra').value.trim() || null;
-    await api(`/api/clips/${c.index}/instruct`, { method: 'POST', body: { instruct_extra: extra } });
-    currentClip.instruct_extra = extra;
-}
-
-async function savePronunciation() {
-    const c = currentClip;
-    if (!c) return;
-    const override = document.getElementById('pronunciation-text').value.trim() || null;
-    await api(`/api/clips/${c.index}/pronunciation`, { method: 'POST', body: { pronunciation_override: override } });
-    currentClip.pronunciation_override = override;
 }
 
 // ── Timeline ─────────────────────────────────

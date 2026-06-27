@@ -464,9 +464,7 @@ class Project:
             return {"error": "Cannot clone non-dub (OP/ED/gap) clips"}
         entry["status"] = ClipStatus.CLONING.value
         if character:
-            entry["character"] = character
-            entry["character_mood"] = mood
-        self.save()
+            self.set_clip_character(index, character, mood)
 
         from anidub.pipeline import clone_line
         from anidub.esperanto import build_instruct_prompt

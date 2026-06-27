@@ -320,11 +320,7 @@ def api_accept(n):
     if err: return err
     proj = _anime.get_active_project()
     proj.accept_clip(n)
-    for i in range(n + 1, proj.get_clip_count() + 1):
-        c = proj.get_clip(i)
-        if c and c.status not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value, ClipStatus.SKIPPED.value):
-            return jsonify({"next_index": i, "done": False})
-    return jsonify({"next_index": None, "done": True})
+    return jsonify({"ok": True})
 
 
 @app.route("/api/clips/<int:n>/reject", methods=["POST"])
