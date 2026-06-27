@@ -122,6 +122,7 @@ button.reset:hover { background: #777; }
 .tl-rejected { background: #a30; }
 .tl-pending { background: #2a2a3e; }
 .tl-skipped { background: #555; }
+.tl-non_dub { background: #3a3a4e; }
 
 #overlay {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -139,3 +140,15 @@ button.reset:hover { background: #777; }
 #char-list div { padding: 3px 0; }
 #char-list button { font-size: 0.75em; padding: 2px 6px; margin-left: 6px; }
 .hint { font-size: 0.75em; color: #666; margin-top: 6px; }
+
+#project-picker { min-width: 240px; }
+#anime-name { min-width: 120px; }
+#episode-select { min-width: 220px; margin-right: 8px; }
+#instruct-extra { height: 50px; font-size: 0.8em; resize: vertical; }
+
+.top-bar {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px;
+}
+.top-bar button { padding: 3px 10px; }
+#clip-title { font-weight: bold; color: #e94560; white-space: nowrap; }

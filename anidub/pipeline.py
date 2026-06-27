@@ -12,7 +12,7 @@ from anidub.esperanto import build_instruct_prompt
 from anidub.extract import extract_ref_clip_from_wav, trim_silence, fit_audio_to_duration
 
 REF_CLIP_DUR = 3.0
-SILENCE_TOP_DB = 30
+SILENCE_TOP_DB = 45
 MIN_TRANSCRIPTION_CHARS = 5
 SAFETY_MARGIN_SEC = 0.1
 
@@ -140,8 +140,11 @@ def clone_line(
     instruct: str,
     out_path: Path,
     whisper_model: str = "openai/whisper-tiny",
+    instruct_extra: str | None = None,
     voice_timeout: int = 120,
 ) -> dict:
+    if instruct_extra:
+        instruct = instruct + "\n" + instruct_extra
     target_dur = target_duration - SAFETY_MARGIN_SEC
 
     from anidub.tts.omnivoice import OmniVoiceTTSBackend

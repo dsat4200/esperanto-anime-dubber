@@ -17,22 +17,21 @@
 
 <main>
   <!-- Setup panel -->
-  <div id="setup-panel" class="panel"{% if not project_path %} style="display:flex"{% endif %}>
+  <div id="setup-panel" class="panel" style="display:flex">
     <h2>Open Project</h2>
+
     <div class="form-row">
-      <label>MKV path:</label>
-      <input type="text" id="mkv-path" placeholder="anime/hxh/Hunter x Hunter (2011)S01E001.mkv">
+      <label>Existing project:</label>
+      <select id="project-picker" onchange="onProjectPicker()"><option value="">-- load --</option></select>
+      <button onclick="loadSelectedProject()">Load</button>
     </div>
+
     <div class="form-row">
-      <label>Project name:</label>
-      <input type="text" id="project-name" placeholder="hxh_S01E001 (default: mkv stem)">
-      <button onclick="openMkv()">Open MKV</button>
+      <label>Or new from anime folder:</label>
+      <input type="text" id="anime-name" placeholder="hxh">
+      <button onclick="openAnime()">Create Project</button>
     </div>
-    <div class="form-row">
-      <label>Or project dir:</label>
-      <input type="text" id="project-dir" placeholder="projects/hxh_S01E001/">
-      <button onclick="openProject()">Open Project</button>
-    </div>
+
     <div id="tracks-section" style="display:none">
       <h3>Audio Tracks</h3>
       <div id="audio-tracks"></div>
@@ -45,15 +44,16 @@
   </div>
 
   <!-- Editor panel -->
-  <div id="editor-panel" class="panel"{% if project_path %} style="display:flex"{% endif %}>
+  <div id="editor-panel" class="panel" style="display:none">
     <div id="editor-left">
       <video id="video-player" controls></video>
     </div>
     <div id="editor-right">
-      <div class="clip-nav">
+      <div class="top-bar">
         <span id="clip-title">Clip -/--</span>
-        <button onclick="prevClip()">&larr; Prev</button>
-        <button onclick="nextClip()">Next &rarr;</button>
+        <select id="episode-select" onchange="switchEpisode(this.value)"><option>--</option></select>
+        <button onclick="prevClip()">&larr;</button>
+        <button onclick="nextClip()">&rarr;</button>
       </div>
 
       <div class="field">
@@ -75,8 +75,16 @@
         <label>Mood:</label>
         <select id="mood-select" onchange="onCharacterChange()"><option value="normal">normal</option></select>
         <div class="btn-row">
-          <button onclick="saveCharacter()" title="Save current ref.wav as a character voice clip">Save as character clip</button>
+          <button onclick="saveCharacter()">Save as character clip</button>
           <button onclick="toggleCharPanel()">Manage</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Additional clone instructions:</label>
+        <textarea id="instruct-extra" rows="2" placeholder="extra pronunciation / delivery notes for Esperanto TTS"></textarea>
+        <div class="btn-row">
+          <button onclick="saveInstruct()">Save instructions</button>
         </div>
       </div>
 
@@ -85,13 +93,13 @@
         <input type="range" id="offset-slider" min="-500" max="500" value="0" step="10" oninput="onOffsetChange(this.value)">
       </div>
 
-      <div class="field">
+      <div class="field clone-only">
         <button class="primary" onclick="cloneCurrent()">Clone</button>
         <button onclick="previewCurrent()">Preview</button>
         <span id="clone-info"></span>
       </div>
 
-      <div class="field btn-row">
+      <div class="field btn-row accept-only">
         <button class="accept" onclick="acceptCurrent()">Accept</button>
         <button class="reject" onclick="rejectCurrent()">Reject</button>
         <button class="reset" onclick="resetCurrent()">Reset</button>
@@ -128,8 +136,5 @@
 <div id="overlay" style="display:none"><div id="overlay-msg"></div></div>
 
 <script src="/static/app.js"></script>
-{% if project_path %}
-<script>window._AUTO_LOAD = {{ project_path|tojson }};</script>
-{% endif %}
 </body>
 </html>

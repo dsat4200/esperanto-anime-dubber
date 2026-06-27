@@ -2,6 +2,8 @@ let currentClip = null;
 let totalClips = 0;
 let characters = {};
 let timelineData = [];
+let episodes = [];
+let activeStem = null;
 
 async function api(url, opts = {}) {
     const defaults = { headers: { 'Content-Type': 'application/json' } };
@@ -24,37 +26,110 @@ function hideOverlay() {
     document.getElementById('overlay').style.display = 'none';
 }
 
-// ── Setup ────────────────────────────────────
+// ── Project discovery ─────────────────────────
 
-async function openMkv() {
-    const path = document.getElementById('mkv-path').value.trim();
-    if (!path) return;
-    const name = document.getElementById('project-name').value.trim() || undefined;
-    showOverlay('Opening...');
+async function loadProjectPicker() {
     try {
-        await api('/api/open', { method: 'POST', body: { mkv_path: path, project_name: name } });
-        hideOverlay();
-        await loadTracks();
-    } catch (e) {
-        hideOverlay();
-        alert('Open failed: ' + e.message);
-    }
+        const projects = await api('/api/projects');
+        const sel = document.getElementById('project-picker');
+        sel.innerHTML = '<option value="">-- load --</option>' +
+            projects.map(p => `<option value="${p.path}">${p.anime_name} (${p.episode_count} eps)</option>`).join('');
+    } catch (e) { console.error('project picker:', e); }
 }
 
-async function openProject() {
-    const dir = document.getElementById('project-dir').value.trim();
-    if (!dir) return;
+function onProjectPicker() {
+    const sel = document.getElementById('project-picker');
+    document.getElementById('anime-name').value = sel.selectedOptions[0]?.text.split(' (')[0] || '';
+}
+
+async function loadSelectedProject() {
+    const path = document.getElementById('project-picker').value;
+    if (!path) return;
     showOverlay('Loading project...');
     try {
-        await api('/api/open', { method: 'POST', body: { project_dir: dir } });
+        await api('/api/open', { method: 'POST', body: { project_dir: path } });
         hideOverlay();
-        await loadTracks();
-        if (await checkDemucs()) { startEditing(); }
+        await loadEpisodes();
     } catch (e) {
         hideOverlay();
         alert('Load failed: ' + e.message);
     }
 }
+
+async function openAnime() {
+    const name = document.getElementById('anime-name').value.trim();
+    if (!name) return;
+    showOverlay('Creating project...');
+    try {
+        await api('/api/open', { method: 'POST', body: { anime: name } });
+        hideOverlay();
+        await loadEpisodes();
+    } catch (e) {
+        hideOverlay();
+        alert('Create failed: ' + e.message);
+    }
+}
+
+// ── Episodes ──────────────────────────────────
+
+async function loadEpisodes() {
+    const data = await api('/api/episodes');
+    episodes = data.episodes;
+    activeStem = data.active_stem;
+
+    const sel = document.getElementById('episode-select');
+    sel.innerHTML = episodes.map(ep => {
+        const marker = ep.status === 'done' ? ' ✓' : ep.status === 'in_progress' ? ' …' : '';
+        return `<option value="${ep.stem}" ${ep.stem === activeStem ? 'selected' : ''}>${ep.stem}${marker} (${ep.clip_count || '?'})</option>`;
+    }).join('');
+
+    if (activeStem) {
+        const tracks = await api('/api/tracks');
+        if (!tracks.demucs_done) {
+            document.getElementById('setup-panel').style.display = 'flex';
+            document.getElementById('editor-panel').style.display = 'none';
+            await loadTracks();
+        } else {
+            document.getElementById('setup-panel').style.display = 'none';
+            document.getElementById('editor-panel').style.display = 'flex';
+            await loadCharacters();
+            await loadTimeline();
+            document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
+            await loadClip(await getFirstUnaccepted());
+        }
+    } else if (episodes.length > 0) {
+        await switchEpisode(episodes[0].stem);
+    }
+}
+
+async function switchEpisode(stem) {
+    if (!stem || stem === activeStem) return;
+    showOverlay('Switching episode...');
+    try {
+        await api('/api/episodes/select', { method: 'POST', body: { stem } });
+        activeStem = stem;
+        hideOverlay();
+
+        const tracks = await api('/api/tracks');
+        if (!tracks.demucs_done) {
+            document.getElementById('setup-panel').style.display = 'flex';
+            document.getElementById('editor-panel').style.display = 'none';
+            await loadTracks();
+        } else {
+            document.getElementById('setup-panel').style.display = 'none';
+            document.getElementById('editor-panel').style.display = 'flex';
+            await loadCharacters();
+            await loadTimeline();
+            document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
+            await loadClip(await getFirstUnaccepted());
+        }
+    } catch (e) {
+        hideOverlay();
+        alert('Switch failed: ' + e.message);
+    }
+}
+
+// ── Setup ────────────────────────────────────
 
 async function loadTracks() {
     const data = await api('/api/tracks');
@@ -64,14 +139,14 @@ async function loadTracks() {
     adiv.innerHTML = data.audio.map((t, i) =>
         `<label><input type="radio" name="audio" value="${i}" ${
             i === 0 ? 'checked' : ''
-        }> ${t.language || '?'} (${t.codec}, ${t.channels}ch)</label>`
+        } onchange="previewTrack('audio', ${i})"> ${t.language || '?'} (${t.codec}, ${t.channels}ch)</label>`
     ).join('<br>');
 
     const sdiv = document.getElementById('sub-tracks');
     sdiv.innerHTML = data.subtitle.map((t, i) =>
         `<label><input type="radio" name="sub" value="${i}" ${
             i === 0 ? 'checked' : ''
-        }> ${t.language || '?'} (${t.codec})</label>`
+        } onchange="previewTrack('sub', ${i})"> ${t.language || '?'} (${t.codec})</label>`
     ).join('<br>');
 
     if (data.demucs_done) {
@@ -100,25 +175,37 @@ async function runDemucs() {
     }
 }
 
-async function checkDemucs() {
-    const data = await api('/api/tracks');
-    return data.demucs_done;
+async function previewTrack(type, index) {
+    try {
+        const resp = await api('/api/preview-sample',
+            { method: 'POST', body: { type, index } });
+        // This returns audio/video directly — not JSON
+        // Use fetch directly to handle binary response
+        const blob = await fetch('/api/preview-sample', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, index }),
+        }).then(r => r.blob());
+        const url = URL.createObjectURL(blob);
+        const video = document.getElementById('video-player');
+        if (type === 'audio') {
+            video.src = url;
+            video.load();
+            video.play();
+        } else {
+            video.src = url;
+            video.load();
+            video.play();
+        }
+    } catch (e) {
+        console.error('previewTrack:', e);
+    }
 }
-
-// ── Editor ───────────────────────────────────
 
 async function startEditing() {
     document.getElementById('setup-panel').style.display = 'none';
     document.getElementById('editor-panel').style.display = 'flex';
-    await loadCharacters();
-    await loadTimeline();
-    document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
-    loadClip(await getFirstUnaccepted());
-}
-
-function getCheckedRadio(name) {
-    const el = document.querySelector(`input[name="${name}"]:checked`);
-    return el ? parseInt(el.value) : 0;
+    await loadEpisodes();
 }
 
 async function getFirstUnaccepted() {
@@ -131,12 +218,17 @@ async function getFirstUnaccepted() {
     return 1;
 }
 
+// ── Editor ───────────────────────────────────
+
 async function loadClip(n) {
     if (!n || n < 1 || n > totalClips) return;
     try {
         const clip = await api('/api/clips/' + n);
         currentClip = clip;
         renderClip();
+        if (clip.needs_processing) {
+            await autoProcess(n);
+        }
     } catch (e) {
         console.error('loadClip failed:', e);
     }
@@ -149,6 +241,7 @@ function renderClip() {
         `Clip ${c.index}/${totalClips}  ${fmtTs(c.start_sec)} → ${fmtTs(c.end_sec)}`;
     document.getElementById('original-text').textContent = c.original_text;
     document.getElementById('translation-text').value = c.translated_text || '';
+    document.getElementById('instruct-extra').value = c.instruct_extra || '';
 
     const sel = document.getElementById('char-select');
     sel.innerHTML = '<option value="">-- none --</option>' +
@@ -167,12 +260,43 @@ function renderClip() {
     document.getElementById('offset-val').textContent = Math.round(c.offset_ms);
 
     const info = [];
+    if (c.status === 'non_dub') {
+        info.push('Original audio only');
+    }
     if (c.clone_ms) info.push(`Clone: ${(c.clone_ms/1000).toFixed(1)}s`);
     if (c.attempts) info.push(`Attempts: ${c.attempts}`);
     info.push(`Status: ${c.status}`);
     document.getElementById('clone-info').textContent = info.join('  |  ');
 
+    // Hide clone/accept/reject for non-dub
+    const nd = c.status === 'non_dub';
+    document.querySelectorAll('.clone-only').forEach(el => el.style.display = nd ? 'none' : '');
+    document.querySelectorAll('.accept-only').forEach(el => el.style.display = nd ? 'none' : '');
+
     renderTimelineHighlight();
+}
+
+async function autoProcess(n) {
+    showOverlay('Processing...');
+    try {
+        const char = document.getElementById('char-select').value || undefined;
+        const mood = document.getElementById('mood-select').value || 'normal';
+        const result = await api(`/api/clips/${n}/process`,
+            { method: 'POST', body: { character: char, mood } });
+        currentClip.status = result.status;
+        currentClip.translated_text = result.translated_text || currentClip.translated_text;
+        loadTimeline();
+        renderClip();
+        if (result.preview_url) {
+            const video = document.getElementById('video-player');
+            video.src = result.preview_url + '?t=' + Date.now();
+            video.load();
+            video.play();
+        }
+    } catch (e) {
+        console.error('autoProcess:', e);
+    }
+    hideOverlay();
 }
 
 async function prevClip() {
@@ -243,10 +367,12 @@ async function previewCurrent() {
 async function acceptCurrent() {
     const c = currentClip;
     if (!c) return;
+    if (c.needs_processing) await autoProcess(c.index);
     try {
         const resp = await api(`/api/clips/${c.index}/accept`, { method: 'POST' });
         currentClip.status = 'accepted';
         loadTimeline();
+        loadEpisodes();
         if (resp.next_index) {
             loadClip(resp.next_index);
         } else if (resp.done) {
@@ -282,8 +408,7 @@ async function onOffsetChange(val) {
     document.getElementById('offset-val').textContent = Math.round(ms);
     const c = currentClip;
     if (!c) return;
-    await api(`/api/clips/${c.index}/offset`,
-        { method: 'POST', body: { offset_ms: ms } });
+    await api(`/api/clips/${c.index}/offset`, { method: 'POST', body: { offset_ms: ms } });
     currentClip.offset_ms = ms;
 }
 
@@ -292,19 +417,28 @@ async function onCharacterChange() {
     if (!c) return;
     const char = document.getElementById('char-select').value || null;
     const mood = document.getElementById('mood-select').value || 'normal';
-    await api(`/api/clips/${c.index}/character`,
-        { method: 'POST', body: { character: char, mood } });
+    await api(`/api/clips/${c.index}/character`, { method: 'POST', body: { character: char, mood } });
     currentClip.character = char;
     currentClip.character_mood = mood;
     renderClip();
 }
 
+async function saveInstruct() {
+    const c = currentClip;
+    if (!c) return;
+    const extra = document.getElementById('instruct-extra').value.trim() || null;
+    await api(`/api/clips/${c.index}/instruct`, { method: 'POST', body: { instruct_extra: extra } });
+    currentClip.instruct_extra = extra;
+}
+
 // ── Timeline ─────────────────────────────────
 
 async function loadTimeline() {
-    const data = await api('/api/timeline');
-    timelineData = data;
-    renderTimelineBar();
+    try {
+        const data = await api('/api/timeline');
+        timelineData = data;
+        renderTimelineBar();
+    } catch (e) { console.error(e); }
 }
 
 function renderTimelineBar() {
@@ -333,9 +467,7 @@ function renderTimelineHighlight() {
     });
 }
 
-function onVideoTimeUpdate() {
-    // Could sync timeline highlight to video position — deferred
-}
+function onVideoTimeUpdate() {}
 
 // ── Characters ───────────────────────────────
 
@@ -347,9 +479,7 @@ async function loadCharacters() {
             Object.keys(characters).map(name =>
                 `<option value="${name}">${name}</option>`
             ).join('');
-    } catch (e) {
-        characters = {};
-    }
+    } catch (e) { characters = {}; }
 }
 
 function toggleCharPanel() {
@@ -362,7 +492,7 @@ function renderCharPanel() {
     const div = document.getElementById('char-list');
     div.innerHTML = Object.entries(characters).map(([name, moods]) =>
         `<strong>${name}</strong><br>` +
-        Object.entries(moods).map(([mood, path]) =>
+        Object.entries(moods).map(([mood]) =>
             `<div>${mood}
                 <button onclick="deleteCharacter('${name}','${mood}')">del</button>
             </div>`
@@ -378,13 +508,10 @@ async function saveCharacter() {
     const mood = document.getElementById('mood-select').value || 'normal';
     showOverlay('Saving...');
     try {
-        await api('/api/characters',
-            { method: 'POST', body: { name, mood, clip_index: c.index } });
+        await api('/api/characters', { method: 'POST', body: { name, mood, clip_index: c.index } });
         await loadCharacters();
         renderClip();
-    } catch (e) {
-        alert('Save failed: ' + e.message);
-    }
+    } catch (e) { alert('Save failed: ' + e.message); }
     hideOverlay();
 }
 
@@ -402,16 +529,13 @@ async function addCharacter() {
     const c = currentClip;
     if (!c) return;
     try {
-        await api('/api/characters',
-            { method: 'POST', body: { name, mood, clip_index: c.index } });
+        await api('/api/characters', { method: 'POST', body: { name, mood, clip_index: c.index } });
         await loadCharacters();
         renderCharPanel();
         renderClip();
         document.getElementById('new-char-name').value = '';
         document.getElementById('new-char-mood').value = '';
-    } catch (e) {
-        alert('Add failed: ' + e.message);
-    }
+    } catch (e) { alert('Add failed: ' + e.message); }
 }
 
 // ── Bulk ─────────────────────────────────────
@@ -425,9 +549,7 @@ async function translateAll() {
             `Translated ${resp.processed}/${resp.total}`;
         loadTimeline();
         if (currentClip) loadClip(currentClip.index);
-    } catch (e) {
-        alert('Translate all failed: ' + e.message);
-    }
+    } catch (e) { alert('Translate all failed: ' + e.message); }
     hideOverlay();
 }
 
@@ -435,18 +557,15 @@ async function cloneAll() {
     const stats = await api('/api/stats');
     const count = (stats.translated || 0) + (stats.cloned || 0) + (stats.rejected || 0);
     if (count === 0) return alert('No translated clips to clone.');
-    if (!confirm(`Clone ${count} clips? This may take a while.`)) return;
+    if (!confirm(`Clone ${count} clips?`)) return;
     showOverlay('Cloning all...');
-    document.getElementById('bulk-status').textContent = 'Cloning...';
     try {
         const resp = await api('/api/clone-all', { method: 'POST' });
         document.getElementById('bulk-status').textContent =
             `Cloned ${resp.processed}/${resp.total}`;
         loadTimeline();
         if (currentClip) loadClip(currentClip.index);
-    } catch (e) {
-        alert('Clone all failed: ' + e.message);
-    }
+    } catch (e) { alert('Clone all failed: ' + e.message); }
     hideOverlay();
 }
 
@@ -463,13 +582,9 @@ async function assembleFull() {
     try {
         const resp = await api('/api/assemble', { method: 'POST' });
         alert('Done: ' + resp.final_path);
-    } catch (e) {
-        alert('Assemble failed: ' + e.message);
-    }
+    } catch (e) { alert('Assemble failed: ' + e.message); }
     hideOverlay();
 }
-
-// ── Utilities ────────────────────────────────
 
 function fmtTs(sec) {
     const h = Math.floor(sec / 3600);
@@ -478,14 +593,6 @@ function fmtTs(sec) {
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(4, '0')}`;
 }
 
-// ── Auto-load ────────────────────────────────
+// ── Init ─────────────────────────────────────
 
-if (window._AUTO_LOAD) {
-    (async () => {
-        try {
-            await api('/api/open', { method: 'POST', body: { project_dir: window._AUTO_LOAD } });
-            await loadTracks();
-            if (await checkDemucs()) startEditing();
-        } catch (e) { console.error('Auto-load failed:', e); }
-    })();
-}
+loadProjectPicker();

@@ -162,22 +162,80 @@ def build_full_episode(
     ep_name = mkv_path.stem.replace(".mkv", "")
     final_mkv = batch_out_dir / f"{ep_name}_Dubbed.mkv"
     bin_path = _ffmpeg_bin()
-    subprocess.run([
-        bin_path, "-y", "-loglevel", "error",
-        "-i", str(mkv_path),
-        "-i", str(dubbed_wav),
-        "-i", str(ass_path),
-        "-map", "0:v:0",
-        "-map", "1:a",
-        "-map", "0:a:0",
-        "-map", "2:s",
-        "-c:v", "copy",
-        "-c:a:0", "aac", "-b:a:0", "256k",
-        "-c:a:1", "copy",
-        "-c:s", "copy",
-        "-metadata:s:a:0", "language=epo",
-        "-metadata:s:a:1", "language=jpn",
-        str(final_mkv),
-    ], check=True)
+
+    # Discover all original streams from the MKV
+    import json as _json
+    ffprobe = str(Path(bin_path).parent / "ffprobe.exe")
+    probe_out = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries",
+         "stream=index,codec_type,codec_name:stream_tags=language,title",
+         "-of", "json", str(mkv_path)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    streams = _json.loads(probe_out).get("streams", [])
+
+    video_idx = None
+    audio_streams = []
+    sub_streams = []
+    for s in streams:
+        tags = s.get("tags", {})
+        if s["codec_type"] == "video" and video_idx is None:
+            video_idx = s["index"]
+        elif s["codec_type"] == "audio":
+            audio_streams.append({
+                "index": s["index"],
+                "codec": s.get("codec_name", "copy"),
+                "language": tags.get("language", ""),
+                "title": tags.get("title", ""),
+            })
+        elif s["codec_type"] == "subtitle":
+            sub_streams.append({
+                "index": s["index"],
+                "codec": s.get("codec_name", "copy"),
+                "language": tags.get("language", ""),
+                "title": tags.get("title", ""),
+            })
+
+    cmd = [bin_path, "-y", "-loglevel", "error"]
+    cmd += ["-i", str(mkv_path)]
+    cmd += ["-i", str(dubbed_wav)]
+    cmd += ["-i", str(ass_path)]
+
+    # Video stream (copy)
+    cmd += ["-map", f"0:v:{video_idx or 0}"]
+    cmd += ["-c:v", "copy"]
+
+    # Esperanto dubbed audio (input 1)
+    cmd += ["-map", "1:a"]
+    cmd += ["-c:a:0", "aac", "-b:a:0", "256k"]
+    cmd += ["-metadata:s:a:0", "language=epo"]
+    cmd += ["-metadata:s:a:0", "title=Esperanto Dub"]
+
+    # All original audio tracks (input 0)
+    for i, ast in enumerate(audio_streams):
+        label = ast["language"] or f"und"
+        title = ast["title"] or f"Original {label}"
+        cmd += ["-map", f"0:a:{ast['index']}"]
+        cmd += [f"-c:a:{1 + i}", "copy"]
+        cmd += [f"-metadata:s:a:{1 + i}", f"language={label}"]
+        cmd += [f"-metadata:s:a:{1 + i}", f"title={title}"]
+
+    # Esperanto subtitles (input 2)
+    cmd += ["-map", "2:s"]
+    cmd += ["-c:s:0", "copy"]
+    cmd += ["-metadata:s:s:0", "language=epo"]
+    cmd += ["-metadata:s:s:0", "title=Esperanto"]
+
+    # All original subtitle tracks (input 0)
+    for i, sst in enumerate(sub_streams):
+        label = sst["language"] or "und"
+        title = sst["title"] or f"Original {label}"
+        cmd += ["-map", f"0:s:{sst['index']}"]
+        cmd += [f"-c:s:{1 + i}", "copy"]
+        cmd += [f"-metadata:s:s:{1 + i}", f"language={label}"]
+        cmd += [f"-metadata:s:s:{1 + i}", f"title={title}"]
+
+    cmd += [str(final_mkv)]
+    subprocess.run(cmd, check=True)
 
     return final_mkv

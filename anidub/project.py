@@ -29,6 +29,7 @@ class ClipStatus(str, Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     SKIPPED = "skipped"
+    NON_DUB = "non_dub"
 
 
 class RefSource(str, Enum):
@@ -61,14 +62,16 @@ class ClipState:
     clone_path: str | None = None
     clone_ms: float | None = None
     attempts: int = 0
+    instruct_extra: str | None = None
 
 
 class Project:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, chars_dir: Path | None = None):
         self.path = Path(path)
         self.state: dict = {}
         self._ass_header: str | None = None
         self._ass_events: list | None = None
+        self._chars_dir = chars_dir or self.path
 
     # ═══════════════════════════════════════════
     #  Lifecycle
@@ -180,6 +183,9 @@ class Project:
         self.state["op_range"] = [intro_s, intro_e]
         self.state["ed_range"] = [outro_s, outro_e]
 
+        op_events = [e for e in events if "op" in e.get("style", "").lower()]
+        ed_events = [e for e in events if "ed" in e.get("style", "").lower()]
+
         usable = []
         for e in main:
             if is_in_range(e["start_sec"], e["end_sec"], intro_s, intro_e):
@@ -193,8 +199,33 @@ class Project:
                            "end_sec": e["end_sec"], "text": clean})
 
         tl = []
+        idx = 0
+
+        for e in op_events:
+            clean = strip_override_tags(e["text"])
+            if not clean:
+                continue
+            idx += 1
+            tl.append({
+                "index": idx,
+                "start_sec": e["start_sec"],
+                "end_sec": e["end_sec"],
+                "original_text": clean,
+                "translated_text": None,
+                "offset_ms": 0.0,
+                "character": None,
+                "character_mood": None,
+                "ref_source": "clip",
+                "ref_clip": None,
+                "status": "non_dub",
+                "clone_path": None,
+                "clone_ms": None,
+                "attempts": 0,
+                "instruct_extra": None,
+            })
+
         for i, u in enumerate(usable):
-            idx = i + 1
+            idx += 1
             tl.append({
                 "index": idx,
                 "start_sec": u["start_sec"],
@@ -210,7 +241,32 @@ class Project:
                 "clone_path": None,
                 "clone_ms": None,
                 "attempts": 0,
+                "instruct_extra": None,
             })
+
+        for e in ed_events:
+            clean = strip_override_tags(e["text"])
+            if not clean:
+                continue
+            idx += 1
+            tl.append({
+                "index": idx,
+                "start_sec": e["start_sec"],
+                "end_sec": e["end_sec"],
+                "original_text": clean,
+                "translated_text": None,
+                "offset_ms": 0.0,
+                "character": None,
+                "character_mood": None,
+                "ref_source": "clip",
+                "ref_clip": None,
+                "status": "non_dub",
+                "clone_path": None,
+                "clone_ms": None,
+                "attempts": 0,
+                "instruct_extra": None,
+            })
+
         self.state["timeline"] = tl
         if tl:
             self.state["selected_clip_index"] = 1
@@ -276,24 +332,16 @@ class Project:
         if not tl:
             return []
 
-        op_s, op_e = self.state.get("op_range", [0.0, 0.0])
-        ed_s, ed_e = self.state.get("ed_range", [0.0, float("inf")])
-        bounds = self.get_timeline_bounds()
-        total_end = max(ed_e if ed_e < float("inf") else bounds[1], bounds[1])
-
         regions: list[TimelineRegion] = []
+        prev_end = 0.0
 
-        if op_e > op_s:
-            regions.append(TimelineRegion(op_s, op_e, "op"))
-
-        prev_end = max(op_e, 0.0)
         for clip in tl:
             cs = clip["start_sec"]
             ce = clip["end_sec"]
             if ce <= prev_end:
                 continue
             gap = cs - prev_end
-            if gap > 2.0:
+            if gap > 2.0 and prev_end > 0:
                 regions.append(TimelineRegion(prev_end, cs, "gap"))
             regions.append(TimelineRegion(
                 cs, ce, "clip",
@@ -301,22 +349,6 @@ class Project:
                 status=ClipStatus(clip["status"]),
             ))
             prev_end = ce
-
-        if prev_end < ed_s and ed_s < float("inf") and ed_e < float("inf"):
-            gap2 = ed_s - prev_end
-            if gap2 > 2.0:
-                regions.append(TimelineRegion(prev_end, ed_s, "gap"))
-            else:
-                regions.append(TimelineRegion(prev_end, ed_s, "gap"))
-
-        if ed_e > ed_s and ed_s < float("inf") and ed_e < float("inf"):
-            regions.append(TimelineRegion(ed_s, ed_e, "ed"))
-
-        if prev_end < total_end and (ed_s >= float("inf") or prev_end < ed_s):
-            if ed_s < float("inf"):
-                total_end = min(total_end, ed_s)
-            if prev_end < total_end:
-                regions.append(TimelineRegion(prev_end, total_end, "gap"))
 
         return regions
 
@@ -347,6 +379,7 @@ class Project:
             clone_path=entry.get("clone_path"),
             clone_ms=entry.get("clone_ms"),
             attempts=entry.get("attempts", 0),
+            instruct_extra=entry.get("instruct_extra"),
         )
 
     def get_current_clip(self) -> ClipState | None:
@@ -416,6 +449,8 @@ class Project:
                    mood: str = "normal",
                    instruct: str | None = None) -> dict:
         entry = self._get_clip_entry(index)
+        if entry.get("status") == ClipStatus.NON_DUB.value:
+            return {"error": "Cannot clone non-dub (OP/ED/gap) clips"}
         entry["status"] = ClipStatus.CLONING.value
         if character:
             entry["character"] = character
@@ -452,6 +487,7 @@ class Project:
             ref_audio=ref_wav,
             target_duration=entry["end_sec"] - entry["start_sec"],
             instruct=instruct_prompt,
+            instruct_extra=entry.get("instruct_extra"),
             out_path=tts_out,
             whisper_model="openai/whisper-tiny",
         )
@@ -504,23 +540,32 @@ class Project:
         entry = self._get_clip_entry(index)
         entry["character"] = character
         entry["character_mood"] = mood
-        if character and get_character_clip(self.path, character, mood):
+        if character and get_character_clip(self._chars_dir, character, mood):
             entry["ref_source"] = RefSource.CHARACTER.value
-            clip = get_character_clip(self.path, character, mood)
+            clip = get_character_clip(self._chars_dir, character, mood)
             entry["ref_clip"] = str(clip.relative_to(self.path))
         else:
             entry["ref_source"] = RefSource.CLIP.value
             entry["ref_clip"] = None
         self.save()
 
+    def set_instruct_extra(self, index: int, instruct_extra: str | None):
+        entry = self._get_clip_entry(index)
+        entry["instruct_extra"] = instruct_extra
+        self.save()
+
     def accept_clip(self, index: int):
         entry = self._get_clip_entry(index)
+        if entry.get("status") == ClipStatus.NON_DUB.value:
+            return
         entry["status"] = ClipStatus.ACCEPTED.value
         self._append_line_to_ass(entry)
         self.save()
 
     def reject_clip(self, index: int):
         entry = self._get_clip_entry(index)
+        if entry.get("status") == ClipStatus.NON_DUB.value:
+            return
         entry["status"] = ClipStatus.REJECTED.value
         self.save()
 
@@ -580,7 +625,7 @@ class Project:
     # ═══════════════════════════════════════════
 
     def save_character_clip(self, name: str, audio: Path, mood: str = "normal") -> Path:
-        p = save_character_clip(self.path, name, audio, mood)
+        p = save_character_clip(self._chars_dir, name, audio, mood)
         chars = self.state.get("characters", {})
         chars.setdefault(name, {})[mood] = str(p.relative_to(self.path))
         self.state["characters"] = chars
@@ -588,7 +633,7 @@ class Project:
         return p
 
     def delete_character_clip(self, name: str, mood: str):
-        delete_character_clip(self.path, name, mood)
+        delete_character_clip(self._chars_dir, name, mood)
         chars = self.state.get("characters", {})
         if name in chars:
             chars[name].pop(mood, None)
@@ -598,16 +643,16 @@ class Project:
         self.save()
 
     def list_characters(self) -> list[str]:
-        return list_characters(self.path)
+        return list_characters(self._chars_dir)
 
     def list_character_moods(self, name: str) -> list[str]:
-        return list_character_moods(self.path, name)
+        return list_character_moods(self._chars_dir, name)
 
     def get_character_clip(self, name: str, mood: str) -> Path | None:
-        return get_character_clip(self.path, name, mood)
+        return get_character_clip(self._chars_dir, name, mood)
 
     def get_all_character_clips(self) -> dict[str, dict[str, Path]]:
-        return get_all_character_clips(self.path)
+        return get_all_character_clips(self._chars_dir)
 
     # ═══════════════════════════════════════════
     #  Final
@@ -649,8 +694,53 @@ class Project:
             errors=self._collect_errors(),
         )
 
-    # ═══════════════════════════════════════════
-    #  Private helpers
+    def needs_processing(self, index: int) -> bool:
+        entry = self._get_clip_entry(index)
+        status = entry.get("status", "pending")
+        if status in ("accepted", "non_dub", "skipped"):
+            return False
+        has_translation = bool(entry.get("translated_text"))
+        has_clone = bool(entry.get("clone_path"))
+        if has_translation and has_clone:
+            return False
+        if status in ("rejected",):
+            return False
+        if status in ("translating", "cloning"):
+            return False
+        return True
+
+    def process_clip(self, index: int, *,
+                     character: str | None = None,
+                     mood: str = "normal") -> dict:
+        entry = self._get_clip_entry(index)
+        result: dict = {"status": entry["status"]}
+
+        if not entry.get("translated_text"):
+            from anidub.translate import translate_single
+            entry["status"] = ClipStatus.TRANSLATING.value
+            self.save()
+            try:
+                entry["translated_text"] = translate_single(entry["original_text"])
+                entry["status"] = ClipStatus.TRANSLATED.value
+            except Exception:
+                entry["translated_text"] = entry["original_text"]
+                entry["status"] = ClipStatus.REJECTED.value
+            result["translated_text"] = entry["translated_text"]
+            result["status"] = entry["status"]
+            self.save()
+
+        if entry.get("status") == ClipStatus.NON_DUB.value:
+            return result
+
+        if not entry.get("clone_path") and entry.get("status") != ClipStatus.REJECTED.value:
+            self.clone_clip(index, character=character, mood=mood)
+
+        if entry.get("clone_path"):
+            preview = self.preview_clip(index)
+            result["preview_url"] = f"/preview/{index:03d}.mp4"
+
+        result["status"] = entry["status"]
+        return result
     # ═══════════════════════════════════════════
 
     def _get_clip_entry(self, index: int) -> dict:
@@ -719,33 +809,236 @@ class Project:
     def _collect_voiced_results(self) -> list[dict]:
         results = []
         for entry in self.state.get("timeline", []):
-            if entry.get("status") != ClipStatus.ACCEPTED.value:
+            if entry.get("status") not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value):
                 continue
-            if not entry.get("clone_path"):
+            if not entry.get("clone_path") and entry.get("status") != ClipStatus.NON_DUB.value:
                 continue
             results.append({
                 "line_index": entry["index"],
                 "start_sec": entry["start_sec"],
                 "end_sec": entry["end_sec"],
                 "text": entry.get("translated_text") or entry["original_text"],
-                "tts_wav": str(self._abs(entry["clone_path"])),
+                "tts_wav": str(self._abs(entry["clone_path"])) if entry.get("clone_path") else "",
                 "raw_dur": entry["end_sec"] - entry["start_sec"],
                 "effective_dur": entry["end_sec"] - entry["start_sec"],
                 "slack_ms": 0,
                 "atempo": "none",
                 "inference_ms": entry.get("clone_ms", 0),
+                "non_dub": entry.get("status") == ClipStatus.NON_DUB.value,
             })
         return results
 
     def _collect_errors(self) -> list[dict]:
         errors = []
         for entry in self.state.get("timeline", []):
-            if entry.get("status") in (ClipStatus.REJECTED.value, ClipStatus.SKIPPED.value):
+            st = entry.get("status")
+            if st in (ClipStatus.REJECTED.value, ClipStatus.SKIPPED.value):
                 errors.append({
                     "line_index": entry["index"],
                     "text": entry.get("translated_text") or entry["original_text"],
                     "start_sec": entry["start_sec"],
                     "end_sec": entry["end_sec"],
-                    "error": f"Status: {entry['status']}",
+                    "error": f"Status: {st}",
                 })
         return errors
+
+
+ANIME_CONFIG = "anime.json"
+
+
+class AnimeProject:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.state: dict = {}
+        self._active: Project | None = None
+        self._active_stem: str | None = None
+
+    @classmethod
+    def create(cls, anime_name: str, anime_dir: Path) -> "AnimeProject":
+        anime_dir = Path(anime_dir)
+        if not anime_dir.is_dir():
+            raise FileNotFoundError(f"Anime directory not found: {anime_dir}")
+
+        mkvs = sorted(anime_dir.glob("*.mkv"))
+        if not mkvs:
+            raise FileNotFoundError(f"No .mkv files found in {anime_dir}")
+
+        path = PROJECTS_ROOT / anime_name
+        path.mkdir(parents=True, exist_ok=True)
+
+        ap = AnimeProject(path)
+        ap.state = {
+            "version": 1,
+            "anime_name": anime_name,
+            "anime_dir": str(anime_dir.resolve()),
+            "episodes": [],
+        }
+
+        for mkv in mkvs:
+            episode_dir = path / mkv.stem
+            ap.state["episodes"].append({
+                "stem": mkv.stem,
+                "mkv_path": str(mkv.resolve()),
+                "decomposed": episode_dir.is_dir() and (episode_dir / "project.json").exists(),
+            })
+
+        ap.save()
+        return ap
+
+    @classmethod
+    def load(cls, path: Path) -> "AnimeProject":
+        ap = AnimeProject(path)
+        cfg = ap.path / ANIME_CONFIG
+        if not cfg.exists():
+            raise FileNotFoundError(f"{ANIME_CONFIG} not found in {ap.path}")
+        with cfg.open("r", encoding="utf-8") as f:
+            ap.state = json.load(f)
+        return ap
+
+    def save(self):
+        self.path.mkdir(parents=True, exist_ok=True)
+        with (self.path / ANIME_CONFIG).open("w", encoding="utf-8") as f:
+            json.dump(self.state, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def discover() -> list[dict]:
+        if not PROJECTS_ROOT.is_dir():
+            return []
+        results = []
+        for d in sorted(PROJECTS_ROOT.iterdir()):
+            if not d.is_dir():
+                continue
+            cfg = d / ANIME_CONFIG
+            if cfg.exists():
+                with cfg.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ep_count = len(data.get("episodes", []))
+                results.append({
+                    "name": d.name,
+                    "anime_name": data.get("anime_name", d.name),
+                    "episode_count": ep_count,
+                    "path": str(d),
+                })
+        return results
+
+    def get_episodes(self) -> list[dict]:
+        episodes = self.state.get("episodes", [])
+        result = []
+        for ep in episodes:
+            stem = ep["stem"]
+            ep_dir = self.path / stem
+            pj = ep_dir / "project.json"
+            status = "idle"
+            clip_count = 0
+            stats = {}
+            if pj.exists():
+                try:
+                    proj = Project(ep_dir)
+                    proj.state = json.loads(pj.read_text(encoding="utf-8"))
+                    proj._init_timeline()
+                    stats = proj.get_stats()
+                except Exception:
+                    stats = {}
+                accepted = stats.get("accepted", 0)
+                total = stats.get("total", 0)
+                if accepted >= total and total > 0:
+                    status = "done"
+                elif stats.get("cloned", 0) > 0 or stats.get("translated", 0) > 0:
+                    status = "in_progress"
+                else:
+                    status = "loaded"
+                clip_count = total
+            result.append({
+                "stem": stem,
+                "mkv_path": ep.get("mkv_path", ""),
+                "decomposed": ep.get("decomposed", False),
+                "status": status,
+                "clip_count": clip_count,
+                "stats": stats,
+            })
+        return result
+
+    def select_episode(self, stem: str) -> Project:
+        if self._active_stem == stem and self._active is not None:
+            return self._active
+
+        self._active_stem = stem
+        ep_dir = self.path / stem
+        pj = ep_dir / "project.json"
+
+        if pj.exists():
+            self._active = Project.load(ep_dir)
+            self._active._chars_dir = self._chars_dir()
+        else:
+            episodes = self.state.get("episodes", [])
+            mkv = None
+            for ep in episodes:
+                if ep["stem"] == stem:
+                    mkv = Path(ep["mkv_path"])
+                    break
+            if not mkv:
+                raise FileNotFoundError(f"No MKV found for episode {stem}")
+            if not mkv.exists():
+                raise FileNotFoundError(f"MKV not found: {mkv}")
+            self._active = Project.create(mkv, name=f"{self.state['anime_name']}/{stem}")
+            self._active._chars_dir = self._chars_dir()
+
+            for ep in self.state.get("episodes", []):
+                if ep["stem"] == stem:
+                    ep["decomposed"] = True
+            self.save()
+
+        return self._active
+
+    def get_active_project(self) -> Project | None:
+        return self._active
+
+    # Character bank (shared across episodes)
+
+    def _chars_dir(self) -> Path:
+        d = self.path / "characters"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_character_clip(self, name: str, audio: Path, mood: str = "normal") -> Path:
+        char_dir = self._chars_dir() / name
+        char_dir.mkdir(parents=True, exist_ok=True)
+        dst = char_dir / f"{mood}.wav"
+        import shutil
+        shutil.copy2(str(audio), str(dst))
+        return dst
+
+    def delete_character_clip(self, name: str, mood: str):
+        clip = self._chars_dir() / name / f"{mood}.wav"
+        if clip.exists():
+            clip.unlink()
+        char_dir = clip.parent
+        if char_dir.is_dir() and not list(char_dir.iterdir()):
+            char_dir.rmdir()
+
+    def list_characters(self) -> list[str]:
+        d = self._chars_dir()
+        return sorted(p.name for p in d.iterdir() if p.is_dir())
+
+    def list_character_moods(self, name: str) -> list[str]:
+        char_dir = self._chars_dir() / name
+        if not char_dir.is_dir():
+            return []
+        return sorted(w.stem for w in char_dir.glob("*.wav"))
+
+    def get_character_clip(self, name: str, mood: str) -> Path | None:
+        clip = self._chars_dir() / name / f"{mood}.wav"
+        return clip if clip.exists() else None
+
+    def get_all_character_clips(self) -> dict[str, dict[str, Path]]:
+        result = {}
+        d = self._chars_dir()
+        for char_dir in sorted(d.iterdir()):
+            if not char_dir.is_dir():
+                continue
+            moods = {}
+            for wav in sorted(char_dir.glob("*.wav")):
+                moods[wav.stem] = wav
+            if moods:
+                result[char_dir.name] = moods
+        return result
