@@ -10,11 +10,21 @@
 <header>
   <span class="logo">anidub-edit</span>
   <nav>
+    <button id="gpu-btn" onclick="toggleGpuPanel()" class="gpu-indicator">GPU --%</button>
     <button onclick="goHome()">Home</button>
     <button onclick="saveProject()">Save</button>
     <button onclick="assembleFull()">Assemble</button>
   </nav>
 </header>
+
+<!-- GPU panel -->
+<div id="gpu-panel" class="gpu-panel" style="display:none">
+  <strong id="gpu-device">--</strong>
+  <div>VRAM: <span id="gpu-alloc">--</span> / <span id="gpu-total">--</span> MB</div>
+  <div class="gpu-bar"><div id="gpu-bar-fill" class="gpu-bar-fill"></div></div>
+  <div><span id="gpu-pct">--</span>% in use</div>
+  <button onclick="clearGpuMemory()">Clear GPU Memory</button>
+</div>
 
 <main>
   <!-- EPISODE HOME PANEL -->

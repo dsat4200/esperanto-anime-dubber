@@ -623,6 +623,46 @@ async function cancelJob() {
     document.getElementById('job-msg').textContent = 'Cancelling...';
 }
 
+// ── GPU Panel ─────────────────────────────────
+
+let gpuTimer = null;
+
+async function toggleGpuPanel() {
+    const panel = document.getElementById('gpu-panel');
+    if (panel.style.display === 'none' || !panel.style.display) {
+        panel.style.display = 'flex';
+        await refreshGpuStats();
+        if (gpuTimer) clearInterval(gpuTimer);
+        gpuTimer = setInterval(refreshGpuStats, 3000);
+    } else {
+        panel.style.display = 'none';
+        if (gpuTimer) { clearInterval(gpuTimer); gpuTimer = null; }
+    }
+}
+
+async function refreshGpuStats() {
+    try {
+        const gpu = await api('/api/gpu');
+        const btn = document.getElementById('gpu-btn');
+        if (!gpu.available) {
+            btn.textContent = 'GPU N/A';
+            return;
+        }
+        btn.textContent = `GPU ${gpu.pct_used}%`;
+        btn.style.color = gpu.pct_used > 75 ? '#e94560' : '#ccc';
+        document.getElementById('gpu-device').textContent = gpu.device;
+        document.getElementById('gpu-alloc').textContent = gpu.allocated_mb;
+        document.getElementById('gpu-total').textContent = gpu.total_mb;
+        document.getElementById('gpu-pct').textContent = gpu.pct_used;
+        document.getElementById('gpu-bar-fill').style.width = gpu.pct_used + '%';
+    } catch (e) {}
+}
+
+async function clearGpuMemory() {
+    await api('/api/gpu/clear', { method: 'POST' });
+    await refreshGpuStats();
+}
+
 async function checkRunningJobs() {
     try {
         const jobs = await api('/api/jobs');
@@ -1025,3 +1065,4 @@ function fmtTs(sec) {
 }
 
 loadProjectPicker();
+refreshGpuStats();

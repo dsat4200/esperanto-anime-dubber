@@ -11,9 +11,19 @@ header {
     border-bottom: 1px solid #0f3460;
     padding: 6px 16px;
     display: flex; justify-content: space-between; align-items: center;
-    flex-shrink: 0;
+    flex-shrink: 0; position: relative;
 }
 .logo { font-weight: bold; font-size: 1.1em; color: #e94560; }
+.gpu-indicator { font-size: 0.75em; padding: 2px 10px; background: #2a1a2a; border-color: #604; }
+.gpu-panel {
+    position: fixed; top: 36px; right: 12px; z-index: 50;
+    background: #16213e; border: 1px solid #0f3460; border-radius: 6px;
+    padding: 12px; min-width: 220px; font-size: 0.85em;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.gpu-bar { height: 8px; background: #1a1a2e; border-radius: 4px; overflow: hidden; }
+.gpu-bar-fill { height: 100%; background: #e94560; border-radius: 4px; transition: width 0.3s; }
+.gpu-panel button { font-size: 0.8em; padding: 3px 10px; }
 nav button {
     background: #0f3460; color: #e0e0e0;
     border: 1px solid #1a1a4e;

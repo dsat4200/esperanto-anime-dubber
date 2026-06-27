@@ -30,6 +30,32 @@ def _ensure_gpu_memory():
         torch.cuda.empty_cache()
 
 
+@app.route("/api/gpu")
+def api_gpu():
+    import torch
+    if not torch.cuda.is_available():
+        return jsonify({"available": False})
+    total = torch.cuda.get_device_properties(0).total_memory / 1024**2
+    allocated = torch.cuda.memory_allocated() / 1024**2
+    reserved = torch.cuda.memory_reserved() / 1024**2
+    return jsonify({
+        "available": True,
+        "device": torch.cuda.get_device_name(0),
+        "total_mb": round(total, 1),
+        "allocated_mb": round(allocated, 1),
+        "reserved_mb": round(reserved, 1),
+        "pct_used": round(allocated / total * 100, 1),
+    })
+
+
+@app.route("/api/gpu/clear", methods=["POST"])
+def api_gpu_clear():
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return jsonify({"ok": True})
+
+
 def _require_anime():
     global _anime
     if _anime is None:
