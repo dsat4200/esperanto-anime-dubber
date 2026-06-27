@@ -143,13 +143,15 @@ def clone_line(
     instruct_extra: str | None = None,
     speed_factor: float = 1.0,
     voice_timeout: int = 120,
+    backend=None,
 ) -> dict:
     if instruct_extra:
         instruct = instruct + "\n" + instruct_extra
     target_dur = target_duration - SAFETY_MARGIN_SEC
 
-    from anidub.tts.omnivoice import OmniVoiceTTSBackend
-    backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+    if backend is None:
+        from anidub.tts.omnivoice import OmniVoiceTTSBackend
+        backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
 
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:

@@ -213,7 +213,7 @@ async function getFirstUnaccepted() {
     totalClips = data.total;
     for (let i = 1; i <= totalClips; i++) {
         const clip = await api('/api/clips/' + i);
-        if (clip.status !== 'accepted') return i;
+        if (clip.status !== 'accepted' && clip.status !== 'non_dub') return i;
     }
     return 1;
 }
@@ -226,8 +226,12 @@ async function loadClip(n) {
         const clip = await api('/api/clips/' + n);
         currentClip = clip;
         renderClip();
-        if (clip.needs_processing) {
+        if (clip.status === 'non_dub') {
+            loadRawPreview(clip.start_sec, clip.end_sec);
+        } else if (clip.needs_processing) {
             await autoProcess(n);
+        } else if (clip.clone_path) {
+            await previewCurrent();
         }
     } catch (e) {
         console.error('loadClip failed:', e);
@@ -346,6 +350,7 @@ async function cloneCurrent() {
         currentClip.attempts = (currentClip.attempts || 0) + 1;
         renderClip();
         loadTimeline();
+        await previewCurrent();
     } catch (e) {
         alert('Clone failed: ' + e.message);
     }
@@ -366,6 +371,22 @@ async function previewCurrent() {
         alert('Preview failed: ' + e.message);
     }
     hideOverlay();
+}
+
+async function loadRawPreview(start_sec, end_sec) {
+    try {
+        const blob = await fetch('/api/preview-raw', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start_sec, end_sec }),
+        }).then(r => r.blob());
+        const video = document.getElementById('video-player');
+        video.src = URL.createObjectURL(blob);
+        video.load();
+        video.play();
+    } catch (e) {
+        console.error('loadRawPreview:', e);
+    }
 }
 
 async function acceptCurrent() {

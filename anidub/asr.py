@@ -74,6 +74,11 @@ def transcribe_ref(
 
     text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
 
+    del input_features
+    del predicted_ids
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return {
         "text": text,
         "model": model_name,

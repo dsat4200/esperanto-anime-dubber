@@ -75,15 +75,16 @@ class OmniVoiceTTSBackend:
         diagnostics["cuda_mem_before_mb"] = round(mem_before, 1)
 
         t0 = time.perf_counter()
-        audio_list = self._model.generate(
-            text=params["text"],
-            ref_audio=params["ref_audio"],
-            ref_text=params["ref_text"],
-            language_id=params["language_id"],
-            duration=params["duration"],
-            num_step=params["num_step"],
-            postprocess_output=params["postprocess_output"],
-        )
+        with torch.inference_mode():
+            audio_list = self._model.generate(
+                text=params["text"],
+                ref_audio=params["ref_audio"],
+                ref_text=params["ref_text"],
+                language_id=params["language_id"],
+                duration=params["duration"],
+                num_step=params["num_step"],
+                postprocess_output=params["postprocess_output"],
+            )
         inference_ms = (time.perf_counter() - t0) * 1000
 
         mem_after = (
@@ -99,6 +100,9 @@ class OmniVoiceTTSBackend:
         diagnostics["cuda_mem_after_mb"] = round(mem_after, 1)
         diagnostics["output_duration"] = out_dur
         diagnostics["postprocess"] = "none (native duration control)"
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return {
             "wav": wav,

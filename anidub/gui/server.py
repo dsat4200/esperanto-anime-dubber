@@ -320,12 +320,9 @@ def api_accept(n):
     if err: return err
     proj = _anime.get_active_project()
     proj.accept_clip(n)
-    nxt = proj.get_next_clip()
-    if nxt and nxt.status != ClipStatus.ACCEPTED:
-        return jsonify({"next_index": nxt.index, "done": False})
-    for i in range(1, proj.get_clip_count() + 1):
+    for i in range(n + 1, proj.get_clip_count() + 1):
         c = proj.get_clip(i)
-        if c and c.status != ClipStatus.ACCEPTED:
+        if c and c.status not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value, ClipStatus.SKIPPED.value):
             return jsonify({"next_index": i, "done": False})
     return jsonify({"next_index": None, "done": True})
 
@@ -391,23 +388,45 @@ def api_clone_all():
     key = "clone-all"
 
     def _run():
-        processed = 0
-        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
-        for i in range(1, total + 1):
-            clip = proj.get_clip(i)
-            if clip and clip.status in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
-                if clip.status == ClipStatus.REJECTED and not clip.translated_text:
-                    pass
-                else:
-                    try:
-                        proj.clone_clip(i, character=clip.character, mood=clip.character_mood or "normal")
-                        processed += 1
-                    except Exception:
+        from anidub.tts.omnivoice import OmniVoiceTTSBackend
+        import torch
+        import time
+
+        whisper_model = "openai/whisper-tiny"
+        backend = None
+        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Loading TTS model..."}
+        try:
+            backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+            processed = 0
+            _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
+            for i in range(1, total + 1):
+                clip = proj.get_clip(i)
+                if clip and clip.status in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
+                    if clip.status == ClipStatus.REJECTED and not clip.translated_text:
                         pass
-            _progress[key]["current"] = i
-            _progress[key]["message"] = f"Cloning clip {i}/{total}"
-        _progress[key]["done"] = True
-        _progress[key]["message"] = f"Cloned {processed}/{total}"
+                    else:
+                        try:
+                            proj.clone_clip(i, character=clip.character, mood=clip.character_mood or "normal", backend=backend)
+                            processed += 1
+                        except Exception as e:
+                            if "timed out" in str(e):
+                                _progress[key]["message"] = f"Timeout on clip {i} — recreating TTS backend..."
+                                time.sleep(30)
+                                del backend
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+                _progress[key]["current"] = i
+                _progress[key]["message"] = f"Cloning clip {i}/{total}"
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            _progress[key]["done"] = True
+            _progress[key]["message"] = f"Cloned {processed}/{total}"
+        finally:
+            if backend is not None:
+                del backend
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"started": True, "total": total})

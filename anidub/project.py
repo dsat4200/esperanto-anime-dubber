@@ -457,7 +457,8 @@ class Project:
     def clone_clip(self, index: int, *,
                    character: str | None = None,
                    mood: str = "normal",
-                   instruct: str | None = None) -> dict:
+                   instruct: str | None = None,
+                   backend=None) -> dict:
         entry = self._get_clip_entry(index)
         if entry.get("status") == ClipStatus.NON_DUB.value:
             return {"error": "Cannot clone non-dub (OP/ED/gap) clips"}
@@ -502,6 +503,7 @@ class Project:
             speed_factor=entry.get("speed_factor", 1.0),
             out_path=tts_out,
             whisper_model="openai/whisper-tiny",
+            backend=backend,
         )
 
         entry["clone_path"] = str(tts_out.relative_to(self.path))
@@ -615,7 +617,7 @@ class Project:
             if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
                 self.translate_clip(i)
 
-    def clone_range(self, start: int, end: int | None = None, character: str | None = None):
+    def clone_range(self, start: int, end: int | None = None, character: str | None = None, backend=None):
         end = end or self.get_clip_count()
         for i in range(start, end + 1):
             clip = self.get_clip(i)
@@ -625,9 +627,10 @@ class Project:
                 continue
             if character or clip.character:
                 self.clone_clip(i, character=character or clip.character,
-                                mood=clip.character_mood or "normal")
+                                mood=clip.character_mood or "normal",
+                                backend=backend)
             else:
-                self.clone_clip(i)
+                self.clone_clip(i, backend=backend)
 
     def accept_all(self):
         for i in range(1, self.get_clip_count() + 1):
