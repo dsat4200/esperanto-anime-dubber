@@ -1,3 +1,4 @@
+import gc
 import time
 from pathlib import Path
 
@@ -7,6 +8,25 @@ import torch
 
 
 _WHISPER_CACHE: dict[str, tuple] = {}
+
+
+def clear_whisper_cache():
+    """Drop any cached Whisper models and reclaim their VRAM."""
+    if not _WHISPER_CACHE:
+        return
+    for processor, model in _WHISPER_CACHE.values():
+        try:
+            if torch.cuda.is_available() and hasattr(model, "cpu"):
+                model.cpu()
+        except Exception:
+            pass
+    _WHISPER_CACHE.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
 
 
 def _load_whisper(model_name: str, device: str, dtype: torch.dtype):
@@ -77,6 +97,7 @@ def transcribe_ref(
     del input_features
     del predicted_ids
     if torch.cuda.is_available():
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     return {

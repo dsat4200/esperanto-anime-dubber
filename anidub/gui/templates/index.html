@@ -20,10 +20,13 @@
 <!-- GPU panel -->
 <div id="gpu-panel" class="gpu-panel" style="display:none">
   <strong id="gpu-device">--</strong>
-  <div>VRAM: <span id="gpu-alloc">--</span> / <span id="gpu-total">--</span> MB</div>
+  <div>Live tensors: <span id="gpu-alloc">--</span> / <span id="gpu-total">--</span> MB</div>
+  <div>Reserved (driver): <span id="gpu-reserved">--</span> MB</div>
   <div class="gpu-bar"><div id="gpu-bar-fill" class="gpu-bar-fill"></div></div>
-  <div><span id="gpu-pct">--</span>% in use</div>
+  <div><span id="gpu-pct">--</span>% reserved</div>
+  <div id="gpu-backends" style="font-size:0.8em;opacity:0.7"></div>
   <button onclick="clearGpuMemory()">Clear GPU Memory</button>
+  <button onclick="clearGpuMemory(true)">Force Unload Models</button>
 </div>
 
 <main>

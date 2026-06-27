@@ -653,13 +653,22 @@ async function refreshGpuStats() {
         document.getElementById('gpu-device').textContent = gpu.device;
         document.getElementById('gpu-alloc').textContent = gpu.allocated_mb;
         document.getElementById('gpu-total').textContent = gpu.total_mb;
+        document.getElementById('gpu-reserved').textContent = gpu.reserved_mb;
         document.getElementById('gpu-pct').textContent = gpu.pct_used;
         document.getElementById('gpu-bar-fill').style.width = gpu.pct_used + '%';
+        const backends = document.getElementById('gpu-backends');
+        if (backends) {
+            const names = gpu.live_backends || [];
+            backends.textContent = names.length
+                ? `Live models: ${names.join(', ')}`
+                : 'No live TTS models loaded';
+        }
     } catch (e) {}
 }
 
-async function clearGpuMemory() {
-    await api('/api/gpu/clear', { method: 'POST' });
+async function clearGpuMemory(force) {
+    const url = force ? '/api/gpu/clear?force=1' : '/api/gpu/clear';
+    await api(url, { method: 'POST' });
     await refreshGpuStats();
 }
 

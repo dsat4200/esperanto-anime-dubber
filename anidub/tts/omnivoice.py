@@ -1,4 +1,5 @@
-﻿import time
+﻿import gc
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,28 @@ class OmniVoiceTTSBackend:
             dtype=dtype,
             attn_implementation="sdpa",
         )
+
+    def unload(self):
+        """Move the model off the GPU (if present) and reclaim reserved VRAM."""
+        m = getattr(self, "_model", None)
+        if m is None:
+            return
+        try:
+            if torch.cuda.is_available():
+                # Move to CPU so the weight tensors are dropped from the CUDA allocator.
+                try:
+                    m.cpu() if hasattr(m, "cpu") else None
+                except Exception:
+                    pass
+                torch.cuda.synchronize()
+        finally:
+            del self._model
+            self._model = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
 
     def generate(
         self,
@@ -87,12 +110,18 @@ class OmniVoiceTTSBackend:
             )
         inference_ms = (time.perf_counter() - t0) * 1000
 
+        # Copy to CPU then release the possibly-CUDA audio list right away so
+        # empty_cache() below actually has something to reclaim.
+        wav = np.asarray(audio_list[0], dtype=np.float32)
+        del audio_list
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         mem_after = (
             torch.cuda.memory_allocated() / 1024**2
             if torch.cuda.is_available() else 0.0
         )
 
-        wav = np.asarray(audio_list[0], dtype=np.float32)
         sr = 24000
         out_dur = wav.shape[-1] / sr
 

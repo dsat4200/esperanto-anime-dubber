@@ -55,6 +55,9 @@ def process_line(
             result = fut.result(timeout=voice_timeout)
         except concurrent.futures.TimeoutError:
             ex.shutdown(wait=False)
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             raise RuntimeError(
                 f"Voice generation timed out after {voice_timeout}s "
                 f"for line: {line['clean_text'][:80]!r}"
@@ -166,6 +169,9 @@ def clone_line(
             result = fut.result(timeout=voice_timeout)
         except concurrent.futures.TimeoutError:
             ex.shutdown(wait=False)
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             raise RuntimeError(
                 f"Voice generation timed out after {voice_timeout}s "
                 f"for text: {text[:80]!r}"

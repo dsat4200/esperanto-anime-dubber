@@ -18,15 +18,62 @@ app = Flask(__name__)
 _anime: AnimeProject | None = None
 _progress: dict = {}
 _jobs: dict = {}
+# Live OmniVoice backends, keyed by job name. Allows /api/gpu/clear?force=1
+# and /api/cleanup to actually drop model weights from VRAM.
+_backends: dict = {}
+
+
+def _free_vram(ipc: bool = True):
+    """Best-effort: synchronize, GC, IPC-collect, empty the allocator cache."""
+    import gc
+    import torch
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    if ipc:
+        torch.cuda.ipc_collect()
+    torch.cuda.empty_cache()
+
+
+def _unload_all_backends():
+    """Tear down any registered OmniVoice backends + the Whisper cache."""
+    import torch
+    if _backends:
+        for key in list(_backends.keys()):
+            backend = _backends.pop(key, None)
+            if backend is not None:
+                try:
+                    backend.unload()
+                except Exception:
+                    pass
+    from anidub.asr import clear_whisper_cache
+    clear_whisper_cache()
+    _free_vram()
 
 
 def _ensure_gpu_memory():
+    """Proactively reclaim reserved VRAM before launching a GPU-bound task.
+
+    Uses ``memory_reserved`` (the caching allocator's held pool) rather than
+    ``memory_allocated`` (live tensors) — the reserved pool is what
+    ``empty_cache`` can actually give back. Sync + GC first so finalized
+    tensors are reclaimed.
+    """
+    import gc
     import torch
     if not torch.cuda.is_available():
         return
     total = torch.cuda.get_device_properties(0).total_memory
-    used = torch.cuda.memory_allocated()
-    if used / total > 0.5:
+    reserved = torch.cuda.memory_reserved()
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    if reserved / total > 0.5:
+        torch.cuda.ipc_collect()
         torch.cuda.empty_cache()
 
 
@@ -38,22 +85,33 @@ def api_gpu():
     total = torch.cuda.get_device_properties(0).total_memory / 1024**2
     allocated = torch.cuda.memory_allocated() / 1024**2
     reserved = torch.cuda.memory_reserved() / 1024**2
+    # Reserved is what the driver sees as "held by this process"; use it for
+    # the indicator so freeing the cache actually shows a drop.
     return jsonify({
         "available": True,
         "device": torch.cuda.get_device_name(0),
         "total_mb": round(total, 1),
         "allocated_mb": round(allocated, 1),
         "reserved_mb": round(reserved, 1),
-        "pct_used": round(allocated / total * 100, 1),
+        "pct_used": round(reserved / total * 100, 1),
+        "pct_allocated": round(allocated / total * 100, 1),
+        "live_backends": list(_backends.keys()),
     })
 
 
 @app.route("/api/gpu/clear", methods=["POST"])
 def api_gpu_clear():
     import torch
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return jsonify({"ok": True})
+    force = request.args.get("force", "").lower() in ("1", "true", "yes")
+    if force:
+        _unload_all_backends()
+    elif torch.cuda.is_available():
+        _free_vram()
+    return jsonify({
+        "ok": True,
+        "force": force,
+        "live_backends": list(_backends.keys()),
+    })
 
 
 def _require_anime():
@@ -233,6 +291,7 @@ def api_batch_clone():
         _jobs[key] = {"running": True, "cancel": False, "type": "batch-clone", "message": "Loading TTS model..."}
         try:
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+            _backends[key] = backend
             _jobs[key]["message"] = "Cloning..."
             _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Cloning..."}
             _ensure_gpu_memory()
@@ -252,17 +311,20 @@ def api_batch_clone():
                 _progress[key]["current"] = processed
                 _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
                 _jobs[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                _free_vram(ipc=False)
             _progress[key]["done"] = True
             _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
         finally:
             _jobs[key]["running"] = False
             _jobs[key]["message"] = "Done"
+            backend = _backends.pop(key, None)
             if backend is not None:
+                try:
+                    backend.unload()
+                except Exception:
+                    pass
                 del backend
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            _free_vram()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"started": True, "total": len(valid), "skipped": skipped})
@@ -608,6 +670,7 @@ def api_clone_all():
         _jobs[key] = {"running": True, "cancel": False, "type": "clone-all", "message": "Loading TTS model..."}
         try:
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+            _backends[key] = backend
             processed = 0
             _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
             _jobs[key]["message"] = "Cloning..."
@@ -628,24 +691,33 @@ def api_clone_all():
                             if "timed out" in str(e):
                                 _progress[key]["message"] = f"Timeout on clip {cid} — recreating TTS backend..."
                                 time.sleep(30)
-                                del backend
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
+                                old = _backends.pop(key, None)
+                                if old is not None:
+                                    try:
+                                        old.unload()
+                                    except Exception:
+                                        pass
+                                    del old
+                                _free_vram()
                                 backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+                                _backends[key] = backend
                 _progress[key]["current"] = idx + 1
                 _progress[key]["message"] = f"Cloning clip {idx + 1}/{total}"
                 _jobs[key]["message"] = f"Cloning clip {idx + 1}/{total}"
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                _free_vram(ipc=False)
             _progress[key]["done"] = True
             _progress[key]["message"] = f"Cloned {processed}/{total}"
         finally:
             _jobs[key]["running"] = False
             _jobs[key]["message"] = "Done"
+            backend = _backends.pop(key, None)
             if backend is not None:
+                try:
+                    backend.unload()
+                except Exception:
+                    pass
                 del backend
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            _free_vram()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"started": True, "total": total})
@@ -893,15 +965,17 @@ def api_job_cancel(key):
 
 @app.route("/api/cleanup", methods=["POST"])
 def api_cleanup():
-    import torch
+    force = request.args.get("force", "").lower() in ("1", "true", "yes")
     for key in list(_jobs.keys()):
         _jobs[key]["cancel"] = True
     proj = _anime.get_active_project() if _anime else None
     if proj:
         proj.cleanup_running()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return jsonify({"ok": True})
+    if force:
+        _unload_all_backends()
+    else:
+        _free_vram()
+    return jsonify({"ok": True, "force": force, "live_backends": list(_backends.keys())})
 
 
 # ── CLI ───────────────────────────────────────
