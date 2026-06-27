@@ -64,6 +64,7 @@ class ClipState:
     attempts: int = 0
     instruct_extra: str | None = None
     speed_factor: float = 1.0
+    pronunciation_override: str | None = None
 
 
 class Project:
@@ -224,6 +225,7 @@ class Project:
                 "attempts": 0,
                 "instruct_extra": None,
                 "speed_factor": 1.0,
+                "pronunciation_override": None,
             })
 
         for i, u in enumerate(usable):
@@ -245,6 +247,7 @@ class Project:
                 "attempts": 0,
                 "instruct_extra": None,
                 "speed_factor": 1.0,
+                "pronunciation_override": None,
             })
 
         for e in ed_events:
@@ -269,6 +272,7 @@ class Project:
                 "attempts": 0,
                 "instruct_extra": None,
                 "speed_factor": 1.0,
+                "pronunciation_override": None,
             })
 
         self.state["timeline"] = tl
@@ -385,6 +389,7 @@ class Project:
             attempts=entry.get("attempts", 0),
             instruct_extra=entry.get("instruct_extra"),
             speed_factor=entry.get("speed_factor", 1.0),
+            pronunciation_override=entry.get("pronunciation_override"),
         )
 
     def get_current_clip(self) -> ClipState | None:
@@ -487,8 +492,9 @@ class Project:
         instruct_prompt = instruct or build_instruct_prompt(entry.get("character"))
 
         tts_out = line_dir / "tts.wav"
+        spoken_text = entry.get("pronunciation_override") or entry.get("translated_text") or entry["original_text"]
         result = clone_line(
-            text=entry.get("translated_text") or entry["original_text"],
+            text=spoken_text,
             ref_audio=ref_wav,
             target_duration=entry["end_sec"] - entry["start_sec"],
             instruct=instruct_prompt,
@@ -560,6 +566,11 @@ class Project:
         entry["speed_factor"] = max(0.5, min(2.0, speed_factor))
         self.save()
 
+    def set_clip_pronunciation(self, index: int, pronunciation_override: str | None):
+        entry = self._get_clip_entry(index)
+        entry["pronunciation_override"] = pronunciation_override if pronunciation_override and pronunciation_override.strip() else None
+        self.save()
+
     def set_instruct_extra(self, index: int, instruct_extra: str | None):
         entry = self._get_clip_entry(index)
         entry["instruct_extra"] = instruct_extra
@@ -590,6 +601,7 @@ class Project:
         entry["ref_source"] = RefSource.CLIP.value
         entry["ref_clip"] = None
         entry["speed_factor"] = 1.0
+        entry["pronunciation_override"] = None
         self.save()
 
     # ═══════════════════════════════════════════

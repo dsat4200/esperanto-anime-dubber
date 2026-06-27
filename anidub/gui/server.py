@@ -5,6 +5,7 @@ import re
 import subprocess as sp
 import sys
 import tempfile
+import threading
 import webbrowser
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from anidub.config import get_ffmpeg_location
 
 app = Flask(__name__)
 _anime: AnimeProject | None = None
+_progress: dict = {}  # {key: {current: int, total: int, done: bool, message: str}}
 
 
 def _require_anime():
@@ -188,6 +190,7 @@ def _clip_to_dict(clip):
         "attempts": clip.attempts,
         "instruct_extra": clip.instruct_extra,
         "speed_factor": clip.speed_factor,
+        "pronunciation_override": clip.pronunciation_override,
         "can_clone": clip.status != ClipStatus.NON_DUB,
     }
     proj = _anime.get_active_project()
@@ -302,6 +305,15 @@ def api_speed(n):
     return jsonify({"ok": True})
 
 
+@app.route("/api/clips/<int:n>/pronunciation", methods=["POST"])
+def api_pronunciation(n):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    _anime.get_active_project().set_clip_pronunciation(n, data.get("pronunciation_override") or None)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/clips/<int:n>/accept", methods=["POST"])
 def api_accept(n):
     err = _require_project()
@@ -342,9 +354,32 @@ def api_translate_all():
     if err: return err
     proj = _anime.get_active_project()
     total = proj.get_clip_count()
-    proj.translate_range(1, total)
-    stats = proj.get_stats()
-    return jsonify({"processed": stats.get("translated", 0), "total": total})
+    key = "translate-all"
+
+    def _run():
+        processed = 0
+        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Translating..."}
+        proj.state["timeline"]  # ensure initialized
+        for i in range(1, total + 1):
+            clip = proj.get_clip(i)
+            if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
+                try:
+                    proj.translate_clip(i)
+                    processed += 1
+                except Exception:
+                    pass
+            _progress[key]["current"] = i
+            _progress[key]["message"] = f"Translating clip {i}/{total}"
+        _progress[key]["done"] = True
+        _progress[key]["message"] = f"Translated {processed}/{total}"
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True, "total": total})
+
+
+@app.route("/api/translate-all/progress")
+def api_translate_progress():
+    return jsonify(_progress.get("translate-all", {"current": 0, "total": 0, "done": True, "message": ""}))
 
 
 @app.route("/api/clone-all", methods=["POST"])
@@ -353,9 +388,34 @@ def api_clone_all():
     if err: return err
     proj = _anime.get_active_project()
     total = proj.get_clip_count()
-    proj.clone_range(1, total)
-    stats = proj.get_stats()
-    return jsonify({"processed": stats.get("cloned", 0), "total": total})
+    key = "clone-all"
+
+    def _run():
+        processed = 0
+        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
+        for i in range(1, total + 1):
+            clip = proj.get_clip(i)
+            if clip and clip.status in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
+                if clip.status == ClipStatus.REJECTED and not clip.translated_text:
+                    pass
+                else:
+                    try:
+                        proj.clone_clip(i, character=clip.character, mood=clip.character_mood or "normal")
+                        processed += 1
+                    except Exception:
+                        pass
+            _progress[key]["current"] = i
+            _progress[key]["message"] = f"Cloning clip {i}/{total}"
+        _progress[key]["done"] = True
+        _progress[key]["message"] = f"Cloned {processed}/{total}"
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True, "total": total})
+
+
+@app.route("/api/clone-all/progress")
+def api_clone_progress():
+    return jsonify(_progress.get("clone-all", {"current": 0, "total": 0, "done": True, "message": ""}))
 
 
 # ── Characters (shared across episodes) ───────

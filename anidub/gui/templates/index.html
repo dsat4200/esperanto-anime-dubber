@@ -70,6 +70,14 @@
       </div>
 
       <div class="field">
+        <label>Pronunciation override (last resort — this text is spoken instead):</label>
+        <textarea id="pronunciation-text" rows="2" placeholder="Leave empty to use translation. Enter phonetic respelling or alternate Esperanto to fix pronunciation"></textarea>
+        <div class="btn-row">
+          <button onclick="savePronunciation()">Save override</button>
+        </div>
+      </div>
+
+      <div class="field">
         <label>Character:</label>
         <select id="char-select" onchange="onCharacterChange()"><option value="">-- none --</option></select>
         <label>Mood:</label>
@@ -94,7 +102,7 @@
       </div>
 
       <div class="field">
-        <label>Speed (<span id="speed-val">1.00</span>x):</label>
+        <label>Duration of dialogue (<span id="speed-val">1.00</span>x):</label>
         <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
       </div>
 

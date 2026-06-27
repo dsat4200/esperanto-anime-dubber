@@ -241,6 +241,7 @@ function renderClip() {
         `Clip ${c.index}/${totalClips}  ${fmtTs(c.start_sec)} → ${fmtTs(c.end_sec)}`;
     document.getElementById('original-text').textContent = c.original_text;
     document.getElementById('translation-text').value = c.translated_text || '';
+    document.getElementById('pronunciation-text').value = c.pronunciation_override || '';
     document.getElementById('instruct-extra').value = c.instruct_extra || '';
 
     const sel = document.getElementById('char-select');
@@ -443,6 +444,14 @@ async function saveInstruct() {
     currentClip.instruct_extra = extra;
 }
 
+async function savePronunciation() {
+    const c = currentClip;
+    if (!c) return;
+    const override = document.getElementById('pronunciation-text').value.trim() || null;
+    await api(`/api/clips/${c.index}/pronunciation`, { method: 'POST', body: { pronunciation_override: override } });
+    currentClip.pronunciation_override = override;
+}
+
 // ── Timeline ─────────────────────────────────
 
 async function loadTimeline() {
@@ -556,9 +565,8 @@ async function translateAll() {
     if (!confirm('Translate all pending clips?')) return;
     showOverlay('Translating all...');
     try {
-        const resp = await api('/api/translate-all', { method: 'POST' });
-        document.getElementById('bulk-status').textContent =
-            `Translated ${resp.processed}/${resp.total}`;
+        await api('/api/translate-all', { method: 'POST' });
+        await pollProgress('translate-all', 'Translating');
         loadTimeline();
         if (currentClip) loadClip(currentClip.index);
     } catch (e) { alert('Translate all failed: ' + e.message); }
@@ -566,22 +574,33 @@ async function translateAll() {
 }
 
 async function cloneAll() {
-    const stats = await api('/api/stats');
-    const count = (stats.translated || 0) + (stats.cloned || 0) + (stats.rejected || 0);
-    if (count === 0) return alert('No translated clips to clone.');
-    if (!confirm(`Clone ${count} clips?`)) return;
+    if (!confirm('Clone all translated clips?')) return;
     showOverlay('Cloning all...');
     try {
         const resp = await api('/api/clone-all', { method: 'POST' });
-        document.getElementById('bulk-status').textContent =
-            `Cloned ${resp.processed}/${resp.total}`;
+        await pollProgress('clone-all', 'Cloning');
         loadTimeline();
         if (currentClip) loadClip(currentClip.index);
     } catch (e) { alert('Clone all failed: ' + e.message); }
     hideOverlay();
 }
 
-// ── Save / Assemble ──────────────────────────
+async function pollProgress(key, label) {
+    let done = false;
+    while (!done) {
+        await sleep(200);
+        try {
+            const p = await api(`/api/${key}/progress`);
+            document.getElementById('overlay-msg').textContent =
+                `${label}... ${p.current}/${p.total}`;
+            document.getElementById('bulk-status').textContent = p.message;
+            if (p.done) done = true;
+        } catch (e) { done = true; }
+    }
+    document.getElementById('bulk-status').textContent = `${label} complete.`;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function saveProject() {
     await api('/api/save', { method: 'POST' });
