@@ -683,6 +683,20 @@ class Project:
             if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
                 self.translate_clip(cid)
 
+    def cleanup_running(self):
+        clips = self.state.get("clips", {})
+        changed = False
+        for entry in clips.values():
+            st = entry.get("status")
+            if st == ClipStatus.CLONING.value:
+                entry["status"] = ClipStatus.TRANSLATED.value if entry.get("translated_text") else ClipStatus.PENDING.value
+                changed = True
+            elif st == ClipStatus.TRANSLATING.value:
+                entry["status"] = ClipStatus.PENDING.value
+                changed = True
+        if changed:
+            self.save()
+
     def clone_range(self, start: int | None = None, end: int | None = None,
                     character: str | None = None, backend=None):
         order = self.state.get("order", [])

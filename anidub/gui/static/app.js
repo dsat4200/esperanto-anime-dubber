@@ -188,6 +188,9 @@ async function goHome() {
     document.getElementById('editor-panel').style.display = 'none';
     document.getElementById('home-panel').style.display = 'flex';
     selectedEpisodes.clear();
+    await api('/api/cleanup', { method: 'POST' });
+    document.getElementById('job-bar').style.display = 'none';
+    currentJobKey = null;
     await loadEpisodes(false);
 }
 

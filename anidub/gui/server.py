@@ -20,6 +20,16 @@ _progress: dict = {}
 _jobs: dict = {}
 
 
+def _ensure_gpu_memory():
+    import torch
+    if not torch.cuda.is_available():
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    used = torch.cuda.memory_allocated()
+    if used / total > 0.5:
+        torch.cuda.empty_cache()
+
+
 def _require_anime():
     global _anime
     if _anime is None:
@@ -199,6 +209,7 @@ def api_batch_clone():
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
             _jobs[key]["message"] = "Cloning..."
             _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Cloning..."}
+            _ensure_gpu_memory()
             for stem in valid:
                 if _jobs[key].get("cancel"):
                     break
@@ -378,6 +389,7 @@ def api_clone(clip_id):
     character = data.get("character") or None
     mood = data.get("mood", "normal")
     proj = _anime.get_active_project()
+    _ensure_gpu_memory()
     result = proj.clone_clip(clip_id, character=character, mood=mood)
     return jsonify({
         "inference_ms": result.get("inference_ms"),
@@ -573,6 +585,7 @@ def api_clone_all():
             processed = 0
             _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
             _jobs[key]["message"] = "Cloning..."
+            _ensure_gpu_memory()
             for idx, cid in enumerate(order):
                 if _jobs[key].get("cancel"):
                     break
@@ -849,6 +862,19 @@ def api_jobs():
 def api_job_cancel(key):
     if key in _jobs:
         _jobs[key]["cancel"] = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup():
+    import torch
+    for key in list(_jobs.keys()):
+        _jobs[key]["cancel"] = True
+    proj = _anime.get_active_project() if _anime else None
+    if proj:
+        proj.cleanup_running()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return jsonify({"ok": True})
 
 

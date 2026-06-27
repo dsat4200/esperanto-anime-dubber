@@ -112,6 +112,18 @@
       </div>
     </div>
   </div>
+
+  <!-- Character panel -->
+  <div id="char-panel" class="panel side-panel" style="display:none">
+    <h3>Characters <button onclick="toggleCharPanel()">X</button></h3>
+    <div id="char-list"></div>
+    <div class="form-row">
+      <input type="text" id="new-char-name" placeholder="Name">
+      <input type="text" id="new-char-mood" placeholder="mood (normal)">
+      <button onclick="addCharacter()">Add</button>
+    </div>
+    <p class="hint">"Add" copies current clip's ref.wav as a character voice print.</p>
+  </div>
 </main>
 
 <!-- Bulk bar -->
