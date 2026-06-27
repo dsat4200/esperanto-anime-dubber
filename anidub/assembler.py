@@ -97,6 +97,29 @@ def _mux_final(
     ], check=True)
 
 
+def _mux_preview(
+    video_path: Path,
+    audio_path: Path,
+    ass_path: Path,
+    out_path: Path,
+):
+    bin_path = _ffmpeg_bin()
+    ass_path_safe = str(ass_path).replace("\\", "/")
+    subprocess.run([
+        bin_path, "-y", "-loglevel", "error",
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-filter_complex", f"[0:v]ass={ass_path_safe}[subbed]",
+        "-map", "[subbed]",
+        "-map", "1:a",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-shortest",
+        str(out_path),
+    ], check=True)
+
+
 def assemble_line(
     mkv_path: Path,
     line: dict,
@@ -136,3 +159,65 @@ def assemble_line(
         "sub_ass": str(sub_ass),
         "final": str(final),
     }
+
+
+def preview_clip(
+    video_only: Path,
+    no_vocals: Path,
+    tts_wav: Path,
+    ass_path: Path,
+    line_index: int,
+    start_sec: float,
+    end_sec: float,
+    text: str,
+    offset_ms: float = 0.0,
+    out_dir: Path | None = None,
+) -> Path:
+    out_dir = Path(out_dir) if out_dir else Path(".")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    dur = end_sec - start_sec
+    adjusted_start = start_sec + offset_ms / 1000.0
+    adjusted_start = max(start_sec, min(adjusted_start, end_sec - 0.1))
+
+    bg_clip = out_dir / "no_vocals_clip.wav"
+    _slice_audio(no_vocals, start_sec, dur, bg_clip)
+
+    dubbed = out_dir / "dubbed.wav"
+    _mix_background_voice(bg_clip, tts_wav, dubbed)
+
+    sub_ass = out_dir / "sub_line.ass"
+    header = ""
+    if ass_path.exists():
+        from anidub.ass import get_ass_header
+        header = get_ass_header(ass_path)
+    sub_ass.write_text(
+        _make_single_line_ass(header, dur, text),
+        encoding="utf-8",
+    )
+
+    video_clip = out_dir / "video_only.mkv"
+    from anidub.extract import extract_video_clip
+    extract_video_clip(video_only, adjusted_start, adjusted_start + dur, video_clip)
+
+    preview = out_dir / "preview.mp4"
+    _mux_preview(video_clip, dubbed, sub_ass, preview)
+    return preview
+
+
+def assemble_full(
+    mkv_path: Path,
+    ass_events: list,
+    batch_out_dir: Path,
+    full_no_vocals: Path,
+    full_original_audio: Path,
+    voiced_results: list,
+    ass_path: Path,
+    errors: list | None = None,
+) -> Path:
+    from anidub.full_episode import build_full_episode
+    return build_full_episode(
+        mkv_path, ass_events, batch_out_dir,
+        full_no_vocals, full_original_audio,
+        voiced_results, ass_path, errors=errors,
+    )

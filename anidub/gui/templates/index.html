@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>anidub-edit</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <span class="logo">anidub-edit</span>
+  <nav>
+    <button onclick="saveProject()">Save</button>
+    <button onclick="assembleFull()">Assemble</button>
+  </nav>
+</header>
+
+<main>
+  <!-- Setup panel -->
+  <div id="setup-panel" class="panel"{% if not project_path %} style="display:flex"{% endif %}>
+    <h2>Open Project</h2>
+    <div class="form-row">
+      <label>MKV path:</label>
+      <input type="text" id="mkv-path" placeholder="anime/hxh/Hunter x Hunter (2011)S01E001.mkv">
+    </div>
+    <div class="form-row">
+      <label>Project name:</label>
+      <input type="text" id="project-name" placeholder="hxh_S01E001 (default: mkv stem)">
+      <button onclick="openMkv()">Open MKV</button>
+    </div>
+    <div class="form-row">
+      <label>Or project dir:</label>
+      <input type="text" id="project-dir" placeholder="projects/hxh_S01E001/">
+      <button onclick="openProject()">Open Project</button>
+    </div>
+    <div id="tracks-section" style="display:none">
+      <h3>Audio Tracks</h3>
+      <div id="audio-tracks"></div>
+      <h3>Subtitle Tracks</h3>
+      <div id="sub-tracks"></div>
+      <button id="btn-demucs" onclick="runDemucs()">Run Demucs</button>
+      <button id="btn-start" onclick="startEditing()" style="display:none">Start Editing</button>
+      <div id="demucs-status"></div>
+    </div>
+  </div>
+
+  <!-- Editor panel -->
+  <div id="editor-panel" class="panel"{% if project_path %} style="display:flex"{% endif %}>
+    <div id="editor-left">
+      <video id="video-player" controls></video>
+    </div>
+    <div id="editor-right">
+      <div class="clip-nav">
+        <span id="clip-title">Clip -/--</span>
+        <button onclick="prevClip()">&larr; Prev</button>
+        <button onclick="nextClip()">Next &rarr;</button>
+      </div>
+
+      <div class="field">
+        <label>Original:</label>
+        <div id="original-text" class="readonly"></div>
+      </div>
+
+      <div class="field">
+        <label>Translation:</label>
+        <textarea id="translation-text" rows="3"></textarea>
+        <div class="btn-row">
+          <button onclick="translateCurrent()">Re-translate</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Character:</label>
+        <select id="char-select" onchange="onCharacterChange()"><option value="">-- none --</option></select>
+        <label>Mood:</label>
+        <select id="mood-select" onchange="onCharacterChange()"><option value="normal">normal</option></select>
+        <div class="btn-row">
+          <button onclick="saveCharacter()" title="Save current ref.wav as a character voice clip">Save as character clip</button>
+          <button onclick="toggleCharPanel()">Manage</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Timing offset (<span id="offset-val">0</span>ms):</label>
+        <input type="range" id="offset-slider" min="-500" max="500" value="0" step="10" oninput="onOffsetChange(this.value)">
+      </div>
+
+      <div class="field">
+        <button class="primary" onclick="cloneCurrent()">Clone</button>
+        <button onclick="previewCurrent()">Preview</button>
+        <span id="clone-info"></span>
+      </div>
+
+      <div class="field btn-row">
+        <button class="accept" onclick="acceptCurrent()">Accept</button>
+        <button class="reject" onclick="rejectCurrent()">Reject</button>
+        <button class="reset" onclick="resetCurrent()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Character panel -->
+  <div id="char-panel" class="panel side-panel" style="display:none">
+    <h3>Characters <button onclick="toggleCharPanel()">X</button></h3>
+    <div id="char-list"></div>
+    <div class="form-row">
+      <input type="text" id="new-char-name" placeholder="Name">
+      <input type="text" id="new-char-mood" placeholder="mood (normal)">
+      <button onclick="addCharacter()">Add</button>
+    </div>
+    <p class="hint">"Add" copies current clip's ref.wav as a character voice print.</p>
+  </div>
+</main>
+
+<!-- Bulk bar -->
+<div id="bulk-bar">
+  <button onclick="translateAll()">Translate All</button>
+  <button onclick="cloneAll()">Clone All</button>
+  <span id="bulk-status"></span>
+</div>
+
+<!-- Timeline bar -->
+<div id="timeline-bar">
+  <div id="timeline-inner"></div>
+</div>
+
+<!-- Status overlay -->
+<div id="overlay" style="display:none"><div id="overlay-msg"></div></div>
+
+<script src="/static/app.js"></script>
+{% if project_path %}
+<script>window._AUTO_LOAD = {{ project_path|tojson }};</script>
+{% endif %}
+</body>
+</html>

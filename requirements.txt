@@ -1,4 +1,5 @@
 demucs>=4.0.0
+flask>=3.0.0
 omnivoice>=0.1.5
 deep-translator>=1.11.0
 rich>=13.0.0

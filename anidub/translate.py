@@ -107,6 +107,29 @@ def translate_text(text: str, translator) -> str:
     return prefix + result
 
 
+def translate_single(text: str) -> str:
+    from deep_translator import GoogleTranslator
+    translator = GoogleTranslator(source="auto", target="eo")
+    clean = strip_override_tags(text)
+    if not clean or not clean.strip():
+        return text
+    for attempt in range(2):
+        try:
+            result = translator.translate(clean)
+            break
+        except Exception as e:
+            err = str(e)
+            if ("500" in err or "Server Error" in err) and attempt == 0:
+                time.sleep(30)
+                continue
+            raise
+    if not result:
+        return text
+    tags = re.findall(r"\{[^}]*\}", text)
+    prefix = "".join(tags) + " " if tags else ""
+    return prefix + result
+
+
 def translate_ass_to_esperanto(
     in_path: Path,
     out_path: Path,
@@ -154,7 +177,19 @@ def translate_ass_to_esperanto(
                 continue
 
             req_start = time.perf_counter()
-            result = translator.translate(clean)
+            for attempt in range(2):
+                try:
+                    result = translator.translate(clean)
+                    break
+                except Exception as e:
+                    err = str(e)
+                    if ("500" in err or "Server Error" in err) and attempt == 0:
+                        if verbose:
+                            print(f"  Google returned 500, retrying in 30s...")
+                        time.sleep(30)
+                        req_start = time.perf_counter()
+                        continue
+                    raise
             req_ms = (time.perf_counter() - req_start) * 1000
             elapsed = time.perf_counter() - t0
             remaining = total_dlg - dlg_count

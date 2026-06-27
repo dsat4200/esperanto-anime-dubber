@@ -23,6 +23,7 @@ from rich.progress import (
 from rich.table import Table
 
 import soundfile as sf
+import torch
 
 from anidub.ass import (
     detect_language,
@@ -160,12 +161,6 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
         if not match:
             raise SystemExit(f"Anime '{args.anime}' not found in {ANIME_ROOT}/")
         mkvs = sorted(set(a["mkv"] for a in match), key=lambda p: p.name)
-        if args.episode:
-            mkvs = [m for m in mkvs if args.episode.lower() in m.stem.lower()]
-            if not mkvs:
-                raise SystemExit(
-                    f"No episodes matching '{args.episode}' in {args.anime}"
-                )
         if len(mkvs) == 1:
             return mkvs[0], None, match[0]["name"]
         picked = show_episode_picker(mkvs, match[0]["name"])
@@ -184,32 +179,6 @@ def resolve_anime(args) -> tuple[Path, Path | None, str]:
     if idx < 0 or idx >= len(anime_list):
         raise SystemExit("Invalid choice")
     return anime_list[idx]["mkv"], None, anime_list[idx]["name"]
-
-
-def resolve_anime_all(args) -> list[tuple[Path, str]]:
-    if args.mkv:
-        return [(args.mkv, "")]
-    if args.anime:
-        anime_list = discover_anime(ANIME_ROOT)
-        match = [a for a in anime_list if a["name"] == args.anime]
-        if not match:
-            raise SystemExit(f"Anime '{args.anime}' not found in {ANIME_ROOT}/")
-        mkvs = sorted(set(a["mkv"] for a in match), key=lambda p: p.name)
-        if args.episode:
-            mkvs = [m for m in mkvs if args.episode.lower() in m.stem.lower()]
-            if not mkvs:
-                raise SystemExit(
-                    f"No episodes matching '{args.episode}' in {args.anime}"
-                )
-        return [(m, match[0]["name"]) for m in mkvs]
-    anime_list = discover_anime(ANIME_ROOT)
-    if not anime_list:
-        raise SystemExit(f"No anime found in {ANIME_ROOT}/")
-    if args.episode:
-        anime_list = [a for a in anime_list if args.episode.lower() in a["mkv"].stem.lower()]
-        if not anime_list:
-            raise SystemExit(f"No episodes matching '{args.episode}'")
-    return [(a["mkv"], a["name"]) for a in anime_list]
 
 
 def resolve_audio_lang(args, mkv_path: Path) -> int:
@@ -653,6 +622,16 @@ def run_batch(args, mkv_path=None, ass_path=None, anime_name=None, audio_stream=
                     "end_sec": line["end_sec"],
                     "error": str(e),
                 })
+                if "timed out" in str(e):
+                    console.print("[yellow]Timeout detected — waiting 30s then recreating TTS backend...[/]")
+                    progress.stop()
+                    time.sleep(30)
+                    del tts_backend
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    tts_backend = OmniVoiceTTSBackend(whisper_model=args.whisper_model)
+                    console.print("[green]TTS backend recreated.[/]")
+                    progress.start()
             progress.update(overall, advance=1)
 
     elapsed = time.perf_counter() - t0_total
@@ -724,6 +703,16 @@ def run_batch(args, mkv_path=None, ass_path=None, anime_name=None, audio_stream=
     return 0
 
 
+def _apply_range(mkvs: list[Path], range_str: str) -> list[Path]:
+    parts = range_str.split("-")
+    start = int(parts[0]) - 1 if parts[0] else 0
+    if len(parts) > 1 and parts[1]:
+        end = int(parts[1])
+    else:
+        end = len(mkvs)
+    return mkvs[start:end]
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="anidub-test-voice",
@@ -731,9 +720,8 @@ def main():
     )
     ap.add_argument("--mkv", type=Path, default=None)
     ap.add_argument("--ass", type=Path, default=None)
-    ap.add_argument("--anime", default=None, help="pick anime by folder name")
-    ap.add_argument("--all", action="store_true", help="process all episodes in the anime folder")
-    ap.add_argument("--episode", "-e", default=None, help="filter to episode(s) by stem substring")
+    ap.add_argument("--anime", default=None, help="anime folder name (with --batch processes all episodes)")
+    ap.add_argument("--range", default=None, help="episode index range, e.g. 1-10 or 5- (1-based)")
     ap.add_argument(
         "--whisper-model",
         default="openai/whisper-tiny",
@@ -774,21 +762,23 @@ def main():
         console.print("[red]ffmpeg not found. Run .\\install.ps1[/]")
         return 1
 
-    if args.all or (args.batch and args.episode):
-        if not args.batch:
-            console.print("[red]--all/--episode requires --batch[/]")
+    if args.batch and args.anime:
+        anime_dir = ANIME_ROOT / args.anime
+        if not anime_dir.is_dir():
+            console.print(f"[red]Anime folder not found: {anime_dir}[/]")
             return 1
-        episodes = resolve_anime_all(args)
-        if not episodes:
-            console.print("[red]No episodes to process.[/]")
+        mkvs = sorted(anime_dir.glob("*.mkv"))
+        if not mkvs:
+            console.print(f"[red]No MKVs found in {anime_dir}[/]")
             return 1
-        if not args.all and len(episodes) == 1:
-            return run_batch(args)
-        audio_lang_stream = resolve_audio_lang(args, episodes[0][0])
-        console.print(f"[bold]Processing {len(episodes)} episode(s)...[/]")
-        for i, (mkv, name) in enumerate(episodes):
-            console.rule(f"[bold cyan]Episode {i+1}/{len(episodes)}: {mkv.stem}[/]")
-            rc = run_batch(args, mkv_path=mkv, anime_name=name, audio_stream=audio_lang_stream)
+        if args.range:
+            mkvs = _apply_range(mkvs, args.range)
+        audio_lang_stream = resolve_audio_lang(args, mkvs[0])
+        console.print(f"[bold]Processing {len(mkvs)} episode(s)...[/]")
+        for i, mkv in enumerate(mkvs):
+            console.rule(f"[bold cyan]Episode {i+1}/{len(mkvs)}: {mkv.stem}[/]")
+            rc = run_batch(args, mkv_path=mkv, anime_name=args.anime,
+                           audio_stream=audio_lang_stream)
             if rc != 0:
                 console.print(f"[red]Episode {mkv.stem} failed (rc={rc}), continuing...[/]")
         return 0

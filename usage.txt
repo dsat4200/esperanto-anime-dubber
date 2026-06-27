@@ -1,0 +1,100 @@
+──────────────────────────ANIDUB USAGE──────────────────────────
+
+
+SETUP
+  First run (or after recreating .venv):
+    > .\.venv\Scripts\Activate.ps1
+    > pip install -e .
+
+  This registers the CLI commands. Run install.ps1 for full CUDA/deps setup.
+
+
+FOLDER SETUP
+  Put anime in:
+    anime/{name}/
+      Episode.Name.S01E01.mkv
+      Episode.Name.S01E02.mkv
+      ...
+
+
+NORMAL WORKFLOW (single line test)
+
+  1  Discover a line to test:
+       anidub-test-voice --anime gabriel_dropout
+
+       Picks an anime → picks an episode → shows line picker → voices one line.
+       Output: test_output/{name}/{episode}/{date}/line_NNN/
+
+  2  Skip the line picker:
+       anidub-test-voice --anime gabriel_dropout --line 42
+
+  3  Direct MKV path (no discovery):
+       anidub-test-voice --mkv "anime/oreimo/Oreimo - 01.mkv" --line 10
+
+
+BATCH A SINGLE EPISODE
+
+       anidub-test-voice --batch --anime gabriel_dropout
+
+       Shows episode picker if multiple MKVs, then voices every line.
+       Output: batch_output/{name}/{episode}/{date}/
+
+
+BATCH ALL EPISODES IN A FOLDER
+
+       anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn
+
+       Processes every MKV in anime/hxh/ sequentially.
+       -y      skips the "Voice N lines?" confirmation
+       --auto  skips duplicate-line merge prompts during translation
+       --audio-lang jpn   skips the audio track picker
+
+       Use --range for a subset:
+       anidub-test-voice --batch --anime hxh --range 1-10
+       anidub-test-voice --batch --anime hxh --range 50-
+
+       Resuming after interruption (completed episodes are skipped):
+       anidub-test-voice --batch --anime hxh --range 15- -y --auto --audio-lang jpn
+
+       This picks up at episode 15 (alphabetical order). Episodes 1-14
+       that already have final.mkv in their output dir are skipped.
+
+
+TRANSLATION ONLY (no voicing)
+
+       anidub-test-voice --translate --anime gabriel_dropout
+       anidub-test-voice --translate --batch --anime hxh --range 1-10 -y --auto
+
+       Extracts embedded ASS from MKV, translates to Esperanto, writes _eo.ass.
+       Stops after translation — does NOT voice.
+
+
+UNATTENDED OVERNIGHT RUN
+
+       anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn --range 1-148
+
+       Zero prompts. Set it and go to work.
+
+
+OPTIONS
+
+  --mkv PATH         Direct path to a single MKV
+  --ass PATH         Direct path to a single ASS file
+  --anime NAME       Anime folder name under anime/
+
+  --batch            Voice all usable lines in the episode
+  --translate        Extract + translate embedded ASS (stops after translate unless --batch)
+  --auto             Skip merge prompts during translation
+  --yes, -y          Skip "Voice N lines?" confirmation
+
+  --range 1-10       Episode index range (with --batch --anime, 1-based, alphabetical)
+  --line N           Skip line picker, use specific subtitle index
+
+  --audio-lang jpn   Audio track language (e.g. jpn, eng)
+  --whisper-model    openai/whisper-tiny (default), -base, -small, -medium, -large-v3-turbo
+  --voice-timeout N  Seconds before aborting a stuck line (default 120)
+
+
+KEYBOARD SHORTCUTS (during batch voicing)
+
+  s     Skip the current line (no Enter needed)
