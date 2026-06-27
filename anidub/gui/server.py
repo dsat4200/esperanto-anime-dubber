@@ -17,6 +17,7 @@ from anidub.config import get_ffmpeg_location
 app = Flask(__name__)
 _anime: AnimeProject | None = None
 _progress: dict = {}
+_jobs: dict = {}
 
 
 def _require_anime():
@@ -142,24 +143,32 @@ def api_batch_translate():
     skipped = info["skipped"]
 
     def _run():
-        processed = 0
-        _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Translating..."}
-        for stem in valid:
-            try:
-                proj = _anime.select_episode(stem)
-                proj.select_audio_track(audio_idx)
-                proj.select_subtitle_track(sub_idx)
-                if not proj.state.get("demucs_done"):
-                    proj.run_demucs()
-                proj.translate_all()
-                processed += 1
-            except Exception:
-                pass
-            _progress[key]["current"] = processed
-            _progress[key]["message"] = f"Episode {processed}/{len(valid)}"
-        _progress[key] = {"current": processed, "total": len(valid),
-                          "done": True, "message": f"Translated {processed}/{len(valid)} episodes",
-                          "skipped": skipped}
+        _jobs[key] = {"running": True, "cancel": False, "type": "batch-translate", "message": "Translating..."}
+        try:
+            processed = 0
+            _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Translating..."}
+            for stem in valid:
+                if _jobs[key].get("cancel"):
+                    break
+                try:
+                    proj = _anime.select_episode(stem)
+                    proj.select_audio_track(audio_idx)
+                    proj.select_subtitle_track(sub_idx)
+                    if not proj.state.get("demucs_done"):
+                        proj.run_demucs()
+                    proj.translate_all()
+                    processed += 1
+                except Exception:
+                    pass
+                _progress[key]["current"] = processed
+                _progress[key]["message"] = f"Episode {processed}/{len(valid)}"
+                _jobs[key]["message"] = f"Translated {processed}/{len(valid)} episodes"
+            _progress[key] = {"current": processed, "total": len(valid),
+                              "done": True, "message": f"Translated {processed}/{len(valid)} episodes",
+                              "skipped": skipped}
+        finally:
+            _jobs[key]["running"] = False
+            _jobs[key]["message"] = "Done"
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"started": True, "total": len(valid), "skipped": skipped})
@@ -185,11 +194,14 @@ def api_batch_clone():
         whisper_model = "openai/whisper-tiny"
         backend = None
         processed = 0
-        _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Loading TTS model..."}
+        _jobs[key] = {"running": True, "cancel": False, "type": "batch-clone", "message": "Loading TTS model..."}
         try:
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
-            _progress[key]["message"] = "Cloning..."
+            _jobs[key]["message"] = "Cloning..."
+            _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Cloning..."}
             for stem in valid:
+                if _jobs[key].get("cancel"):
+                    break
                 try:
                     proj = _anime.select_episode(stem)
                     proj.select_audio_track(audio_idx)
@@ -202,11 +214,14 @@ def api_batch_clone():
                     pass
                 _progress[key]["current"] = processed
                 _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
+                _jobs[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             _progress[key]["done"] = True
             _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
         finally:
+            _jobs[key]["running"] = False
+            _jobs[key]["message"] = "Done"
             if backend is not None:
                 del backend
             if torch.cuda.is_available():
@@ -504,20 +519,28 @@ def api_translate_all():
     key = "translate-all"
 
     def _run():
-        processed = 0
-        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Translating..."}
-        for idx, cid in enumerate(order):
-            clip = proj.get_clip(cid)
-            if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
-                try:
-                    proj.translate_clip(cid)
-                    processed += 1
-                except Exception:
-                    pass
-            _progress[key]["current"] = idx + 1
-            _progress[key]["message"] = f"Translating clip {idx + 1}/{total}"
-        _progress[key]["done"] = True
-        _progress[key]["message"] = f"Translated {processed}/{total}"
+        _jobs[key] = {"running": True, "cancel": False, "type": "translate-all", "message": "Translating..."}
+        try:
+            processed = 0
+            _progress[key] = {"current": 0, "total": total, "done": False, "message": "Translating..."}
+            for idx, cid in enumerate(order):
+                if _jobs[key].get("cancel"):
+                    break
+                clip = proj.get_clip(cid)
+                if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
+                    try:
+                        proj.translate_clip(cid)
+                        processed += 1
+                    except Exception:
+                        pass
+                _progress[key]["current"] = idx + 1
+                _progress[key]["message"] = f"Translating clip {idx + 1}/{total}"
+                _jobs[key]["message"] = f"Translating clip {idx + 1}/{total}"
+            _progress[key]["done"] = True
+            _progress[key]["message"] = f"Translated {processed}/{total}"
+        finally:
+            _jobs[key]["running"] = False
+            _jobs[key]["message"] = "Done"
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"started": True, "total": total})
@@ -544,12 +567,15 @@ def api_clone_all():
 
         whisper_model = "openai/whisper-tiny"
         backend = None
-        _progress[key] = {"current": 0, "total": total, "done": False, "message": "Loading TTS model..."}
+        _jobs[key] = {"running": True, "cancel": False, "type": "clone-all", "message": "Loading TTS model..."}
         try:
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
             processed = 0
             _progress[key] = {"current": 0, "total": total, "done": False, "message": "Cloning..."}
+            _jobs[key]["message"] = "Cloning..."
             for idx, cid in enumerate(order):
+                if _jobs[key].get("cancel"):
+                    break
                 clip = proj.get_clip(cid)
                 if clip and clip.status in (ClipStatus.TRANSLATED, ClipStatus.CLONED, ClipStatus.REJECTED):
                     if clip.status == ClipStatus.REJECTED and not clip.translated_text:
@@ -569,11 +595,14 @@ def api_clone_all():
                                 backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
                 _progress[key]["current"] = idx + 1
                 _progress[key]["message"] = f"Cloning clip {idx + 1}/{total}"
+                _jobs[key]["message"] = f"Cloning clip {idx + 1}/{total}"
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             _progress[key]["done"] = True
             _progress[key]["message"] = f"Cloned {processed}/{total}"
         finally:
+            _jobs[key]["running"] = False
+            _jobs[key]["message"] = "Done"
             if backend is not None:
                 del backend
             if torch.cuda.is_available():
@@ -807,6 +836,20 @@ def serve_preview(clip_id):
             "Cache-Control": "no-cache",
         },
     )
+
+
+# ── Jobs ─────────────────────────────────────
+
+@app.route("/api/jobs")
+def api_jobs():
+    return jsonify(_jobs)
+
+
+@app.route("/api/jobs/<key>/cancel", methods=["POST"])
+def api_job_cancel(key):
+    if key in _jobs:
+        _jobs[key]["cancel"] = True
+    return jsonify({"ok": True})
 
 
 # ── CLI ───────────────────────────────────────

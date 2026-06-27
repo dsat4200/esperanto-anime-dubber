@@ -41,6 +41,33 @@
   <div id="editor-panel" class="panel" style="display:none">
     <div id="editor-left">
       <video id="video-player" controls></video>
+
+      <div class="field clone-only">
+        <label>Audio shift (<span id="audio-shift-val">0</span>ms):</label>
+        <input type="range" id="audio-shift-slider" min="-500" max="500" value="0" step="10" onchange="onAudioShiftChange(this.value)">
+      </div>
+
+      <div class="field clone-only">
+        <label>Dialogue speed (<span id="speed-val">1.00</span>x):</label>
+        <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
+      </div>
+
+      <div class="field clone-only">
+        <button class="primary" onclick="saveSettings()">Save settings</button>
+        <button onclick="cloneCurrent()">Clone</button>
+        <button onclick="previewCurrent()">Preview</button>
+        <span id="clone-info"></span>
+      </div>
+
+      <div class="field">
+        <button onclick="toggleSign()" id="btn-toggle-sign">Mark as Sign</button>
+      </div>
+
+      <div class="btn-row accept-only">
+        <button class="accept" onclick="acceptCurrent()">Accept</button>
+        <button class="reject" onclick="rejectCurrent()">Reject</button>
+        <button class="reset" onclick="resetCurrent()">Reset</button>
+      </div>
     </div>
     <div id="editor-right">
       <div class="top-bar">
@@ -83,25 +110,6 @@
         <label>Additional clone instructions:</label>
         <textarea id="instruct-extra" rows="2"></textarea>
       </div>
-
-      <div class="field">
-        <label>Dialogue speed (<span id="speed-val">1.00</span>x):</label>
-        <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
-      </div>
-
-      <div class="field clone-only">
-        <button class="primary" onclick="saveSettings()">Save settings</button>
-        <button onclick="cloneCurrent()">Clone</button>
-        <button onclick="previewCurrent()">Preview</button>
-        <button onclick="toggleSign()">Mark as Sign</button>
-        <span id="clone-info"></span>
-      </div>
-
-      <div class="field btn-row accept-only">
-        <button class="accept" onclick="acceptCurrent()">Accept</button>
-        <button class="reject" onclick="rejectCurrent()">Reject</button>
-        <button class="reset" onclick="resetCurrent()">Reset</button>
-      </div>
     </div>
   </div>
 </main>
@@ -111,6 +119,13 @@
   <button onclick="translateAll()">Translate All</button>
   <button onclick="cloneAll()">Clone All</button>
   <span id="bulk-status"></span>
+</div>
+
+<!-- Job bar -->
+<div id="job-bar" class="job-bar" style="display:none">
+  <span class="spinner"></span>
+  <span id="job-msg"></span>
+  <button onclick="cancelJob()">Cancel</button>
 </div>
 
 <!-- Timeline bar -->

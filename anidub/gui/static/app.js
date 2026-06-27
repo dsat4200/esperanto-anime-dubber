@@ -4,6 +4,7 @@ let timelineClips = [];
 let episodes = [];
 let activeStem = null;
 let dataAnimeName = '';
+let currentJobKey = null;
 
 let selectedEpisodes = new Set();
 let batchTrackAudioIdx = null;
@@ -87,13 +88,14 @@ async function openAnime() {
 
 // ── Episodes ──────────────────────────────────
 
-async function loadEpisodes() {
+async function loadEpisodes(autoOpen = true) {
     const data = await api('/api/episodes');
     episodes = data.episodes;
     activeStem = data.active_stem;
     dataAnimeName = data.anime_name || '';
     renderEpisodeHome();
-    if (activeStem) {
+    checkRunningJobs();
+    if (autoOpen && activeStem) {
         await setupEditorForActive();
     }
 }
@@ -186,7 +188,7 @@ async function goHome() {
     document.getElementById('editor-panel').style.display = 'none';
     document.getElementById('home-panel').style.display = 'flex';
     selectedEpisodes.clear();
-    await loadEpisodes();
+    await loadEpisodes(false);
 }
 
 async function setupEditorForActive() {
@@ -295,6 +297,9 @@ function renderClip() {
     document.getElementById('speed-slider').value = Math.round((c.speed_factor || 1.0) * 100);
     document.getElementById('speed-val').textContent = (c.speed_factor || 1.0).toFixed(2);
 
+    document.getElementById('audio-shift-slider').value = Math.round(c.audio_offset_ms || 0);
+    document.getElementById('audio-shift-val').textContent = Math.round(c.audio_offset_ms || 0);
+
     const info = [];
     if (c.status === 'non_dub') info.push('Original audio only');
     if (c.status === 'sign') info.push('Sign/No audio');
@@ -307,6 +312,10 @@ function renderClip() {
     const nd = c.status === 'non_dub' || c.status === 'sign';
     document.querySelectorAll('.clone-only').forEach(el => el.style.display = nd ? 'none' : '');
     document.querySelectorAll('.accept-only').forEach(el => el.style.display = nd ? 'none' : '');
+
+    const btnSign = document.getElementById('btn-toggle-sign');
+    btnSign.textContent = c.status === 'sign' ? 'Mark as Vocal' : 'Mark as Sign';
+    btnSign.style.display = c.status === 'non_dub' ? 'none' : '';
 }
 
 async function autoProcess(clipId) {
@@ -367,12 +376,14 @@ async function saveSettings() {
     const character = document.getElementById('char-select').value || null;
     const mood = document.getElementById('mood-select').value || 'normal';
     const speedFactor = parseInt(document.getElementById('speed-slider').value) / 100;
+    const audioOffset = parseFloat(document.getElementById('audio-shift-slider').value);
 
     await api(`/api/clips/${clipId}/translate`, { method: 'POST', body: { text_override: translation } });
     await api(`/api/clips/${clipId}/pronunciation`, { method: 'POST', body: { pronunciation_override: pronunciation } });
     await api(`/api/clips/${clipId}/instruct`, { method: 'POST', body: { instruct_extra: instructExtra } });
     await api(`/api/clips/${clipId}/character`, { method: 'POST', body: { character, mood } });
     await api(`/api/clips/${clipId}/speed`, { method: 'POST', body: { speed_factor: speedFactor } });
+    await api(`/api/clips/${clipId}/audio-offset`, { method: 'POST', body: { offset_ms: audioOffset } });
 
     currentClip.translated_text = translation;
     currentClip.status = 'translated';
@@ -381,6 +392,7 @@ async function saveSettings() {
     currentClip.character = character;
     currentClip.character_mood = mood;
     currentClip.speed_factor = speedFactor;
+    currentClip.audio_offset_ms = audioOffset;
     renderClip();
     loadTimeline();
 }
@@ -483,6 +495,16 @@ async function onSpeedChange(val) {
     currentClip.speed_factor = pct;
 }
 
+async function onAudioShiftChange(val) {
+    const ms = parseFloat(val);
+    document.getElementById('audio-shift-val').textContent = Math.round(ms);
+    const c = currentClip;
+    if (!c) return;
+    await api(`/api/clips/${c.clip_id}/audio-offset`, { method: 'POST', body: { offset_ms: ms } });
+    currentClip.audio_offset_ms = ms;
+    loadTimeline();
+}
+
 async function onCharacterChange() {
     const c = currentClip;
     if (!c) return;
@@ -550,6 +572,7 @@ async function runBatch(type) {
             method: 'POST',
             body: { stems, audio_idx: batchTrackAudioIdx, sub_idx: batchTrackSubIdx },
         });
+        startJobPolling(key);
         await pollBatchProgress(key);
         selectedEpisodes.clear();
         await loadEpisodes();
@@ -569,6 +592,44 @@ async function pollBatchProgress(key) {
         } catch (e) { done = true; }
     }
     document.getElementById('bulk-status').textContent = 'Complete.';
+}
+
+async function startJobPolling(key) {
+    currentJobKey = key;
+    document.getElementById('job-bar').style.display = 'flex';
+    pollJobStatus();
+}
+
+async function pollJobStatus() {
+    if (!currentJobKey) return;
+    try {
+        const jobs = await api('/api/jobs');
+        if (!jobs[currentJobKey] || !jobs[currentJobKey].running) {
+            document.getElementById('job-bar').style.display = 'none';
+            currentJobKey = null;
+            return;
+        }
+        document.getElementById('job-msg').textContent = jobs[currentJobKey].message || 'Running...';
+    } catch (e) {}
+    setTimeout(pollJobStatus, 2000);
+}
+
+async function cancelJob() {
+    if (!currentJobKey) return;
+    await api(`/api/jobs/${currentJobKey}/cancel`, { method: 'POST' });
+    document.getElementById('job-msg').textContent = 'Cancelling...';
+}
+
+async function checkRunningJobs() {
+    try {
+        const jobs = await api('/api/jobs');
+        for (const [key, job] of Object.entries(jobs)) {
+            if (job.running) {
+                startJobPolling(key);
+                break;
+            }
+        }
+    } catch (e) {}
 }
 
 // ── Timeline Canvas ───────────────────────────
@@ -906,6 +967,7 @@ async function translateAll() {
     showOverlay('Translating all...');
     try {
         await api('/api/translate-all', { method: 'POST' });
+        startJobPolling('translate-all');
         await pollProgress('translate-all', 'Translating');
         loadTimeline();
         if (currentClip) loadClip(currentClip.clip_id);
@@ -917,6 +979,7 @@ async function cloneAll() {
     showOverlay('Cloning all...');
     try {
         await api('/api/clone-all', { method: 'POST' });
+        startJobPolling('clone-all');
         await pollProgress('clone-all', 'Cloning');
         loadTimeline();
         if (currentClip) loadClip(currentClip.clip_id);
