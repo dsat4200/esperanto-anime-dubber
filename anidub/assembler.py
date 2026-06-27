@@ -51,10 +51,12 @@ def _mix_background_voice(
     bg_path: Path,
     voice_path: Path,
     out_path: Path,
+    delay_ms: float = 0.0,
 ):
     bin_path = _ffmpeg_bin()
+    delay_part = f"adelay={delay_ms}|{delay_ms}," if delay_ms > 0 else ""
     chain = (
-        f"[1:a]aformat=channel_layouts=stereo[voice];"
+        f"[1:a]{delay_part}aformat=channel_layouts=stereo[voice];"
         f"[0:a][voice]amix=inputs=2:duration=first:"
         f"weights={_MIX_WEIGHT_BG} {_MIX_WEIGHT_VOICE}[out]"
     )
@@ -177,14 +179,32 @@ def preview_clip(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     dur = end_sec - start_sec
-    adjusted_start = start_sec + offset_ms / 1000.0
-    adjusted_start = max(start_sec, min(adjusted_start, end_sec - 0.1))
 
     bg_clip = out_dir / "no_vocals_clip.wav"
     _slice_audio(no_vocals, start_sec, dur, bg_clip)
 
+    voice_input = tts_wav
+    delay_ms = offset_ms
+    if offset_ms < -1:
+        from tempfile import NamedTemporaryFile
+        trim_fd = NamedTemporaryFile(suffix=".wav", delete=False)
+        trim_fd.close()
+        trim_path = Path(trim_fd.name)
+        bin_path = _ffmpeg_bin()
+        trim_start = abs(offset_ms) / 1000.0
+        subprocess.run([bin_path, "-y", "-loglevel", "error",
+                        "-ss", f"{trim_start:.3f}",
+                        "-i", str(tts_wav),
+                        "-c:a", "pcm_s16le",
+                        str(trim_path)], check=True)
+        voice_input = trim_path
+        delay_ms = 0
+
     dubbed = out_dir / "dubbed.wav"
-    _mix_background_voice(bg_clip, tts_wav, dubbed)
+    _mix_background_voice(bg_clip, voice_input, dubbed, delay_ms=delay_ms)
+
+    if voice_input != tts_wav:
+        voice_input.unlink(missing_ok=True)
 
     sub_ass = out_dir / "sub_line.ass"
     header = ""
@@ -198,7 +218,7 @@ def preview_clip(
 
     video_clip = out_dir / "video_only.mkv"
     from anidub.extract import extract_video_clip
-    extract_video_clip(video_only, adjusted_start, adjusted_start + dur, video_clip)
+    extract_video_clip(video_only, start_sec, start_sec + dur, video_clip)
 
     preview = out_dir / "preview.mp4"
     _mux_preview(video_clip, dubbed, sub_ass, preview)
