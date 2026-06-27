@@ -91,7 +91,7 @@ def api_episodes():
     if err: return err
     eps = _anime.get_episodes()
     active = _anime._active_stem
-    return jsonify({"episodes": eps, "active_stem": active})
+    return jsonify({"episodes": eps, "active_stem": active, "anime_name": _anime.state.get("anime_name", "")})
 
 
 @app.route("/api/episodes/select", methods=["POST"])
@@ -107,6 +107,123 @@ def api_episode_select():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
+
+
+@app.route("/api/episodes/<stem>/title", methods=["POST"])
+def api_episode_title(stem):
+    err = _require_anime()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    _anime.set_episode_title(stem, data.get("title"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/episodes/<stem>/complete", methods=["POST"])
+def api_episode_complete(stem):
+    err = _require_anime()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    _anime.mark_episode_complete(stem, data.get("completed", True))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/episodes/batch-translate", methods=["POST"])
+def api_batch_translate():
+    err = _require_anime()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    stems = data.get("stems", [])
+    audio_idx = data.get("audio_idx", 0)
+    sub_idx = data.get("sub_idx", 0)
+    key = "batch-translate"
+
+    info = _anime.process_batch_episodes(stems, audio_idx, sub_idx, key, None)
+    valid = info["valid"]
+    skipped = info["skipped"]
+
+    def _run():
+        processed = 0
+        _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Translating..."}
+        for stem in valid:
+            try:
+                proj = _anime.select_episode(stem)
+                proj.select_audio_track(audio_idx)
+                proj.select_subtitle_track(sub_idx)
+                if not proj.state.get("demucs_done"):
+                    proj.run_demucs()
+                proj.translate_all()
+                processed += 1
+            except Exception:
+                pass
+            _progress[key]["current"] = processed
+            _progress[key]["message"] = f"Episode {processed}/{len(valid)}"
+        _progress[key] = {"current": processed, "total": len(valid),
+                          "done": True, "message": f"Translated {processed}/{len(valid)} episodes",
+                          "skipped": skipped}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True, "total": len(valid), "skipped": skipped})
+
+
+@app.route("/api/episodes/batch-clone", methods=["POST"])
+def api_batch_clone():
+    err = _require_anime()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    stems = data.get("stems", [])
+    audio_idx = data.get("audio_idx", 0)
+    sub_idx = data.get("sub_idx", 0)
+    key = "batch-clone"
+
+    info = _anime.process_batch_episodes(stems, audio_idx, sub_idx, key, None)
+    valid = info["valid"]
+    skipped = info["skipped"]
+
+    def _run():
+        from anidub.tts.omnivoice import OmniVoiceTTSBackend
+        import torch
+        whisper_model = "openai/whisper-tiny"
+        backend = None
+        processed = 0
+        _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Loading TTS model..."}
+        try:
+            backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+            _progress[key]["message"] = "Cloning..."
+            for stem in valid:
+                try:
+                    proj = _anime.select_episode(stem)
+                    proj.select_audio_track(audio_idx)
+                    proj.select_subtitle_track(sub_idx)
+                    if not proj.state.get("demucs_done"):
+                        proj.run_demucs()
+                    proj.clone_range(backend=backend)
+                    processed += 1
+                except Exception:
+                    pass
+                _progress[key]["current"] = processed
+                _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            _progress[key]["done"] = True
+            _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
+        finally:
+            if backend is not None:
+                del backend
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True, "total": len(valid), "skipped": skipped})
+
+
+@app.route("/api/episodes/batch-translate/progress")
+def api_batch_translate_progress():
+    return jsonify(_progress.get("batch-translate", {"current": 0, "total": 0, "done": True, "message": "", "skipped": []}))
+
+
+@app.route("/api/episodes/batch-clone/progress")
+def api_batch_clone_progress():
+    return jsonify(_progress.get("batch-clone", {"current": 0, "total": 0, "done": True, "message": "", "skipped": []}))
 
 
 # ── Setup (per episode) ───────────────────────

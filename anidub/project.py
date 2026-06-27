@@ -713,10 +713,17 @@ class Project:
         self._init_timeline()
         clips = self.state.get("clips", {})
         counts = {s.value: 0 for s in ClipStatus}
+        translated_total = 0
+        cloned_total = 0
         for entry in clips.values():
             st = entry.get("status", "pending")
             counts[st] = counts.get(st, 0) + 1
-        return {"total": len(clips), **counts}
+            if entry.get("translated_text"):
+                translated_total += 1
+            if entry.get("clone_path"):
+                cloned_total += 1
+        return {"total": len(clips), "translated_total": translated_total,
+                "cloned_total": cloned_total, **counts}
 
     # ═══════════════════════════════════════════
     #  Character bank
@@ -1006,6 +1013,8 @@ class AnimeProject:
                 "stem": mkv.stem,
                 "mkv_path": str(mkv.resolve()),
                 "decomposed": episode_dir.is_dir() and (episode_dir / "project.json").exists(),
+                "title": None,
+                "completed": False,
             })
 
         ap.save()
@@ -1047,16 +1056,41 @@ class AnimeProject:
                 })
         return results
 
+    @staticmethod
+    def _episode_color(completed: bool, accepted: int, relevant: int,
+                        translated: int = 0, cloned: int = 0) -> str:
+        if completed:
+            return "cyan"
+        if relevant == 0:
+            return "lightgrey"
+        if accepted == 0 and (translated > 0 or cloned > 0):
+            return "darkgrey"
+        if accepted == 0:
+            return "lightgrey"
+        pct = accepted / relevant * 100
+        if pct >= 90:
+            return "green"
+        if pct >= 75:
+            return "lime"
+        if pct >= 50:
+            return "yellow"
+        if pct >= 25:
+            return "orange"
+        return "red"
+
     def get_episodes(self) -> list[dict]:
         episodes = self.state.get("episodes", [])
         result = []
-        for ep in episodes:
+        for i, ep in enumerate(episodes):
             stem = ep["stem"]
             ep_dir = self.path / stem
             pj = ep_dir / "project.json"
             status = "idle"
             clip_count = 0
             stats = {}
+            relevant = 0
+            audio_count = 0
+            sub_count = 0
             if pj.exists():
                 try:
                     proj = Project(ep_dir)
@@ -1064,6 +1098,12 @@ class AnimeProject:
                     proj._migrate_if_needed()
                     proj._init_timeline()
                     stats = proj.get_stats()
+                    relevant = max(0, stats.get("total", 0) -
+                                   stats.get("non_dub", 0) -
+                                   stats.get("sign", 0) -
+                                   stats.get("skipped", 0))
+                    audio_count = len(proj.state.get("tracks", {}).get("audio", []))
+                    sub_count = len(proj.state.get("tracks", {}).get("subtitle", []))
                 except Exception:
                     stats = {}
                 accepted = stats.get("accepted", 0)
@@ -1075,15 +1115,91 @@ class AnimeProject:
                 else:
                     status = "loaded"
                 clip_count = total
+            accepted = stats.get("accepted", 0)
+            translated = stats.get("translated", 0)
+            cloned = stats.get("cloned", 0)
+            progress_pct = round(accepted / relevant * 100, 1) if relevant > 0 else (100 if ep.get("completed") else 0)
+            translation_pct = round(stats.get("translated_total", 0) / relevant * 100, 1) if relevant > 0 else 0
+            clone_pct = round(stats.get("cloned_total", 0) / relevant * 100, 1) if relevant > 0 else 0
+            color = self._episode_color(
+                ep.get("completed", False), accepted, relevant, translated, cloned,
+            )
             result.append({
                 "stem": stem,
+                "number": i + 1,
+                "title": ep.get("title") or stem,
+                "completed": ep.get("completed", False),
                 "mkv_path": ep.get("mkv_path", ""),
                 "decomposed": ep.get("decomposed", False),
                 "status": status,
                 "clip_count": clip_count,
+                "relevant": relevant,
+                "progress_pct": progress_pct,
+                "translation_pct": translation_pct,
+                "clone_pct": clone_pct,
+                "color": color,
+                "audio_track_count": audio_count,
+                "sub_track_count": sub_count,
                 "stats": stats,
             })
         return result
+
+    def set_episode_title(self, stem: str, title: str | None):
+        for ep in self.state.get("episodes", []):
+            if ep["stem"] == stem:
+                ep["title"] = title if title and title.strip() else None
+                self.save()
+                return
+
+    def mark_episode_complete(self, stem: str, completed: bool):
+        for ep in self.state.get("episodes", []):
+            if ep["stem"] == stem:
+                ep["completed"] = completed
+                self.save()
+                return
+
+    def get_episode_track_counts(self, stem: str) -> dict[str, int]:
+        ep_dir = self.path / stem
+        pj = ep_dir / "project.json"
+        if not pj.exists():
+            return {"audio": 0, "sub": 0}
+        try:
+            proj = Project(ep_dir)
+            proj.state = json.loads(pj.read_text(encoding="utf-8"))
+            return {
+                "audio": len(proj.state.get("tracks", {}).get("audio", [])),
+                "sub": len(proj.state.get("tracks", {}).get("subtitle", [])),
+            }
+        except Exception:
+            return {"audio": 0, "sub": 0}
+
+    def batch_translate_episodes(self, stems: list[str],
+                                  audio_idx: int, sub_idx: int) -> list[str]:
+        valid = []
+        for stem in stems:
+            tc = self.get_episode_track_counts(stem)
+            if tc["audio"] <= audio_idx or tc["sub"] <= sub_idx:
+                continue
+            valid.append(stem)
+        return valid
+
+    def batch_clone_episodes(self, stems: list[str],
+                              audio_idx: int, sub_idx: int) -> list[str]:
+        return self.batch_translate_episodes(stems, audio_idx, sub_idx)
+
+    def process_batch_episodes(self, stems: list[str],
+                                audio_idx: int, sub_idx: int,
+                                progress_key: str,
+                                process_fn) -> dict:
+        valid_stems = []
+        skipped = []
+        for stem in stems:
+            tc = self.get_episode_track_counts(stem)
+            if tc["audio"] <= audio_idx or tc["sub"] <= sub_idx:
+                skipped.append(stem)
+            else:
+                valid_stems.append(stem)
+        return {"valid": valid_stems, "skipped": skipped}
 
     def select_episode(self, stem: str) -> Project:
         if self._active_stem == stem and self._active is not None:

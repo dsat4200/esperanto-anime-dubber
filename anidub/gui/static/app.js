@@ -1,9 +1,14 @@
 let currentClip = null;
-let totalClips = 0;
 let characters = {};
 let timelineClips = [];
 let episodes = [];
 let activeStem = null;
+let dataAnimeName = '';
+
+let selectedEpisodes = new Set();
+let batchTrackAudioIdx = null;
+let batchTrackSubIdx = null;
+let pendingBatchType = null;
 
 let timelineCtx = null;
 let timelineVP = { startSec: 0, pxPerSec: 50 };
@@ -34,9 +39,7 @@ function showOverlay(msg) {
     document.getElementById('overlay').style.display = 'flex';
     document.getElementById('overlay-msg').textContent = msg;
 }
-function hideOverlay() {
-    document.getElementById('overlay').style.display = 'none';
-}
+function hideOverlay() { document.getElementById('overlay').style.display = 'none'; }
 
 // ── Project discovery ─────────────────────────
 
@@ -88,32 +91,143 @@ async function loadEpisodes() {
     const data = await api('/api/episodes');
     episodes = data.episodes;
     activeStem = data.active_stem;
-
-    const sel = document.getElementById('episode-select');
-    sel.innerHTML = episodes.map(ep => {
-        const marker = ep.status === 'done' ? ' ✓' : ep.status === 'in_progress' ? ' …' : '';
-        return `<option value="${ep.stem}" ${ep.stem === activeStem ? 'selected' : ''}>${ep.stem}${marker} (${ep.clip_count || '?'})</option>`;
-    }).join('');
-
+    dataAnimeName = data.anime_name || '';
+    renderEpisodeHome();
     if (activeStem) {
-        const tracks = await api('/api/tracks');
-        if (!tracks.demucs_done) {
-            document.getElementById('setup-panel').style.display = 'flex';
-            document.getElementById('editor-panel').style.display = 'none';
-            await loadTracks();
-        } else {
-            document.getElementById('setup-panel').style.display = 'none';
-            document.getElementById('editor-panel').style.display = 'flex';
-            initTimelineCanvas();
-            await loadCharacters();
-            await loadTimeline();
-            document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
-            const first = await getFirstUnaccepted();
-            await loadClip(first);
-        }
-    } else if (episodes.length > 0) {
-        await switchEpisode(episodes[0].stem);
+        await setupEditorForActive();
     }
+}
+
+function renderEpisodeHome() {
+    const wrapper = document.getElementById('home-episodes');
+    const grid = document.getElementById('episode-grid');
+    if (!episodes.length) {
+        wrapper.style.display = 'none';
+        return;
+    }
+    wrapper.style.display = 'block';
+    document.getElementById('home-title').textContent = dataAnimeName || 'Episodes';
+    grid.innerHTML = episodes.map(ep => {
+        const pct = ep.progress_pct || 0;
+        const tPct = ep.translation_pct || 0;
+        const cPct = ep.clone_pct || 0;
+        return `<div class="ep-card" data-color="${ep.color}" data-stem="${ep.stem}"
+                     onclick="onEpisodeClick(event, '${ep.stem}')"
+                     ondblclick="openEpisode('${ep.stem}')">
+            <div class="ep-num">#${ep.number}</div>
+            <div class="ep-title">${escHtml(ep.title || ep.stem)}</div>
+            <div class="ep-bars">
+                <div class="ep-bar ep-bar-tr"><div class="ep-bar-fill" style="width:${tPct}%"></div><span>Tr ${tPct}%</span></div>
+                <div class="ep-bar ep-bar-cl"><div class="ep-bar-fill" style="width:${cPct}%"></div><span>Cl ${cPct}%</span></div>
+                <div class="ep-bar ep-bar-ac"><div class="ep-bar-fill" style="width:${pct}%"></div><span>Ac ${pct}%</span></div>
+            </div>
+        </div>`;
+    }).join('');
+    updateSelectionUI();
+}
+
+function fillColor(color) {
+    const m = { cyan: '#0ff', green: '#0a4', lime: '#9acd32', yellow: '#cc0', orange: '#e80', red: '#e30', darkgrey: '#555', lightgrey: '#444' };
+    return m[color] || '#444';
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function onEpisodeClick(e, stem) {
+    if (e.shiftKey) {
+        toggleSelection(stem);
+    } else {
+        if (!selectedEpisodes.has(stem)) {
+            selectedEpisodes.clear();
+            selectedEpisodes.add(stem);
+        } else if (selectedEpisodes.size === 1) {
+            selectedEpisodes.clear();
+        }
+        updateSelectionUI();
+    }
+}
+
+function toggleSelection(stem) {
+    if (selectedEpisodes.has(stem)) selectedEpisodes.delete(stem);
+    else selectedEpisodes.add(stem);
+    updateSelectionUI();
+}
+
+function updateSelectionUI() {
+    const cards = document.querySelectorAll('.ep-card');
+    cards.forEach(c => {
+        const stem = c.dataset.stem;
+        c.classList.toggle('selected', selectedEpisodes.has(stem));
+    });
+    const ba = document.getElementById('batch-actions');
+    const count = selectedEpisodes.size;
+    ba.style.display = count > 0 ? 'flex' : 'none';
+    document.querySelectorAll('.sel-count').forEach(s => s.textContent = count);
+}
+
+// ── Open / Home ───────────────────────────────
+
+async function openEpisode(stem) {
+    showOverlay('Loading episode...');
+    try {
+        await api('/api/episodes/select', { method: 'POST', body: { stem } });
+        activeStem = stem;
+        hideOverlay();
+        document.getElementById('home-panel').style.display = 'none';
+        document.getElementById('editor-panel').style.display = 'flex';
+        await setupEditor();
+    } catch (e) {
+        hideOverlay();
+        alert('Failed to open episode: ' + e.message);
+    }
+}
+
+async function goHome() {
+    document.getElementById('editor-panel').style.display = 'none';
+    document.getElementById('home-panel').style.display = 'flex';
+    selectedEpisodes.clear();
+    await loadEpisodes();
+}
+
+async function setupEditorForActive() {
+    const tracks = await api('/api/tracks');
+    if (!tracks.demucs_done) {
+        await runDemucsFlow();
+    }
+    document.getElementById('home-panel').style.display = 'none';
+    document.getElementById('editor-panel').style.display = 'flex';
+    await setupEditor();
+}
+
+async function setupEditor() {
+    const tracks = await api('/api/tracks');
+    if (!tracks.demucs_done) {
+        await runDemucsFlow();
+    }
+    initTimelineCanvas();
+    await loadCharacters();
+    await loadTimeline();
+    document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
+    populateEpisodeDropdown();
+    const first = await getFirstUnaccepted();
+    await loadClip(first);
+}
+
+async function runDemucsFlow() {
+    showOverlay('Running Demucs (may take a few minutes)...');
+    try {
+        await api('/api/demucs', { method: 'POST' });
+    } catch (e) {
+        alert('Demucs failed: ' + e.message);
+    }
+    hideOverlay();
+}
+
+function populateEpisodeDropdown() {
+    const sel = document.getElementById('episode-select');
+    sel.innerHTML = episodes.map(ep =>
+        `<option value="${ep.stem}" ${ep.stem === activeStem ? 'selected' : ''}>${ep.title || ep.stem}</option>`
+    ).join('');
 }
 
 async function switchEpisode(stem) {
@@ -123,100 +237,14 @@ async function switchEpisode(stem) {
         await api('/api/episodes/select', { method: 'POST', body: { stem } });
         activeStem = stem;
         hideOverlay();
-
-        const tracks = await api('/api/tracks');
-        if (!tracks.demucs_done) {
-            document.getElementById('setup-panel').style.display = 'flex';
-            document.getElementById('editor-panel').style.display = 'none';
-            await loadTracks();
-        } else {
-            document.getElementById('setup-panel').style.display = 'none';
-            document.getElementById('editor-panel').style.display = 'flex';
-            initTimelineCanvas();
-            await loadCharacters();
-            await loadTimeline();
-            document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
-            const first = await getFirstUnaccepted();
-            await loadClip(first);
-        }
+        await setupEditor();
     } catch (e) {
         hideOverlay();
         alert('Switch failed: ' + e.message);
     }
 }
 
-// ── Setup ────────────────────────────────────
-
-async function loadTracks() {
-    const data = await api('/api/tracks');
-    document.getElementById('tracks-section').style.display = 'block';
-
-    const adiv = document.getElementById('audio-tracks');
-    adiv.innerHTML = data.audio.map((t, i) =>
-        `<label><input type="radio" name="audio" value="${i}" ${
-            i === 0 ? 'checked' : ''
-        } onchange="previewTrack('audio', ${i})"> ${t.language || '?'} (${t.codec}, ${t.channels}ch)</label>`
-    ).join('<br>');
-
-    const sdiv = document.getElementById('sub-tracks');
-    sdiv.innerHTML = data.subtitle.map((t, i) =>
-        `<label><input type="radio" name="sub" value="${i}" ${
-            i === 0 ? 'checked' : ''
-        } onchange="previewTrack('sub', ${i})"> ${t.language || '?'} (${t.codec})</label>`
-    ).join('<br>');
-
-    if (data.demucs_done) {
-        document.getElementById('btn-demucs').style.display = 'none';
-        document.getElementById('btn-start').style.display = 'inline';
-        document.getElementById('demucs-status').textContent = 'Demucs already done.';
-    }
-}
-
-async function runDemucs() {
-    const audioIdx = parseInt(document.querySelector('input[name="audio"]:checked')?.value || '0');
-    const subIdx = parseInt(document.querySelector('input[name="sub"]:checked')?.value || '0');
-    await api('/api/audio-track', { method: 'POST', body: { index: audioIdx } });
-    await api('/api/sub-track', { method: 'POST', body: { index: subIdx } });
-
-    showOverlay('Running Demucs (may take a few minutes)...');
-    try {
-        await api('/api/demucs', { method: 'POST' });
-        hideOverlay();
-        document.getElementById('btn-demucs').style.display = 'none';
-        document.getElementById('btn-start').style.display = 'inline';
-        document.getElementById('demucs-status').textContent = 'Demucs complete.';
-    } catch (e) {
-        hideOverlay();
-        alert('Demucs failed: ' + e.message);
-    }
-}
-
-async function previewTrack(type, index) {
-    try {
-        const blob = await fetch('/api/preview-sample', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type, index }),
-        }).then(r => r.blob());
-        const url = URL.createObjectURL(blob);
-        const video = document.getElementById('video-player');
-        video.src = url;
-        video.load();
-        video.play();
-    } catch (e) {
-        console.error('previewTrack:', e);
-    }
-}
-
-async function startEditing() {
-    document.getElementById('setup-panel').style.display = 'none';
-    document.getElementById('editor-panel').style.display = 'flex';
-    await loadEpisodes();
-}
-
 async function getFirstUnaccepted() {
-    const data = await api('/api/stats');
-    totalClips = data.total;
     if (!timelineClips.length) return null;
     for (const c of timelineClips) {
         if (c.status !== 'accepted' && c.status !== 'non_dub' && c.status !== 'sign') return c.clip_id;
@@ -240,9 +268,7 @@ async function loadClip(clipId) {
             await previewCurrent();
         }
         drawTimeline();
-    } catch (e) {
-        console.error('loadClip failed:', e);
-    }
+    } catch (e) { console.error('loadClip failed:', e); }
 }
 
 function renderClip() {
@@ -260,14 +286,12 @@ function renderClip() {
         Object.keys(characters).map(name =>
             `<option value="${name}" ${c.character === name ? 'selected' : ''}>${name}</option>`
         ).join('');
-
     const msel = document.getElementById('mood-select');
     if (c.character && characters[c.character]) {
         msel.innerHTML = Object.keys(characters[c.character]).map(m =>
             `<option value="${m}" ${c.character_mood === m ? 'selected' : ''}>${m}</option>`
         ).join('');
     }
-
     document.getElementById('speed-slider').value = Math.round((c.speed_factor || 1.0) * 100);
     document.getElementById('speed-val').textContent = (c.speed_factor || 1.0).toFixed(2);
 
@@ -302,9 +326,7 @@ async function autoProcess(clipId) {
             video.load();
             video.play();
         }
-    } catch (e) {
-        console.error('autoProcess:', e);
-    }
+    } catch (e) { console.error('autoProcess:', e); }
     hideOverlay();
 }
 
@@ -331,9 +353,7 @@ async function restoreTranslation() {
         currentClip.status = 'translated';
         renderClip();
         loadTimeline();
-    } catch (e) {
-        alert('Translate failed: ' + e.message);
-    }
+    } catch (e) { alert('Translate failed: ' + e.message); }
     hideOverlay();
 }
 
@@ -380,9 +400,7 @@ async function cloneCurrent() {
         renderClip();
         loadTimeline();
         await previewCurrent();
-    } catch (e) {
-        alert('Clone failed: ' + e.message);
-    }
+    } catch (e) { alert('Clone failed: ' + e.message); }
     hideOverlay();
 }
 
@@ -396,26 +414,21 @@ async function previewCurrent() {
         video.src = resp.url + '?t=' + Date.now();
         video.load();
         video.play();
-    } catch (e) {
-        alert('Preview failed: ' + e.message);
-    }
+    } catch (e) { alert('Preview failed: ' + e.message); }
     hideOverlay();
 }
 
 async function loadRawPreview(start_sec, end_sec) {
     try {
         const blob = await fetch('/api/preview-raw', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ start_sec, end_sec }),
         }).then(r => r.blob());
         const video = document.getElementById('video-player');
         video.src = URL.createObjectURL(blob);
         video.load();
         video.play();
-    } catch (e) {
-        console.error('loadRawPreview:', e);
-    }
+    } catch (e) { console.error('loadRawPreview:', e); }
 }
 
 async function toggleSign() {
@@ -438,9 +451,7 @@ async function acceptCurrent() {
         loadTimeline();
         loadEpisodes();
         nextClip();
-    } catch (e) {
-        alert('Accept failed: ' + e.message);
-    }
+    } catch (e) { alert('Accept failed: ' + e.message); }
 }
 
 async function rejectCurrent() {
@@ -483,12 +494,88 @@ async function onCharacterChange() {
     renderClip();
 }
 
+// ── Batch Operations ──────────────────────────
+
+async function batchTranslate() {
+    pendingBatchType = 'translate';
+    if (batchTrackAudioIdx === null) {
+        await showTrackModal();
+        return;
+    }
+    await runBatch('translate');
+}
+
+async function batchClone() {
+    pendingBatchType = 'clone';
+    if (batchTrackAudioIdx === null) {
+        await showTrackModal();
+        return;
+    }
+    await runBatch('clone');
+}
+
+async function showTrackModal() {
+    const stem = selectedEpisodes.values().next().value;
+    if (!stem) return;
+    const data = await api('/api/tracks');
+    document.getElementById('modal-audio-tracks').innerHTML = '<h4>Audio</h4>' +
+        data.audio.map((t, i) => `<label><input type="radio" name="m-audio" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec}, ${t.channels}ch)</label>`).join('');
+    document.getElementById('modal-sub-tracks').innerHTML = '<h4>Subtitles</h4>' +
+        data.subtitle.map((t, i) => `<label><input type="radio" name="m-sub" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec})</label>`).join('');
+    document.getElementById('track-modal').style.display = 'flex';
+}
+
+async function confirmBatchTracks() {
+    batchTrackAudioIdx = parseInt(document.querySelector('input[name="m-audio"]:checked')?.value || '0');
+    batchTrackSubIdx = parseInt(document.querySelector('input[name="m-sub"]:checked')?.value || '0');
+    document.getElementById('track-modal').style.display = 'none';
+    if (pendingBatchType === 'translate') await runBatch('translate');
+    else await runBatch('clone');
+}
+
+function cancelBatchTracks() {
+    document.getElementById('track-modal').style.display = 'none';
+    pendingBatchType = null;
+}
+
+async function runBatch(type) {
+    const stems = [...selectedEpisodes];
+    if (!stems.length) return;
+    const key = type === 'translate' ? 'batch-translate' : 'batch-clone';
+    const endpoint = type === 'translate' ? '/api/episodes/batch-translate' : '/api/episodes/batch-clone';
+
+    showOverlay(`${type === 'translate' ? 'Translating' : 'Cloning'} episodes...`);
+    try {
+        await api(endpoint, {
+            method: 'POST',
+            body: { stems, audio_idx: batchTrackAudioIdx, sub_idx: batchTrackSubIdx },
+        });
+        await pollBatchProgress(key);
+        selectedEpisodes.clear();
+        await loadEpisodes();
+    } catch (e) { alert(`Batch ${type} failed: ` + e.message); }
+    hideOverlay();
+}
+
+async function pollBatchProgress(key) {
+    let done = false;
+    while (!done) {
+        await sleep(300);
+        try {
+            const p = await api(`/api/episodes/${key}/progress`);
+            document.getElementById('overlay-msg').textContent = p.message || `${key}...`;
+            document.getElementById('bulk-status').textContent = p.message || '';
+            if (p.done) done = true;
+        } catch (e) { done = true; }
+    }
+    document.getElementById('bulk-status').textContent = 'Complete.';
+}
+
 // ── Timeline Canvas ───────────────────────────
 
 function initTimelineCanvas() {
     const canvas = document.getElementById('timeline-canvas');
     timelineCtx = canvas.getContext('2d');
-
     const resizeCanvas = () => {
         const rect = canvas.parentElement.getBoundingClientRect();
         canvas.width = rect.width * (window.devicePixelRatio || 1);
@@ -500,7 +587,6 @@ function initTimelineCanvas() {
     };
     resizeCanvas();
     new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
-
     canvas.addEventListener('mousedown', onTimelineMouseDown);
     canvas.addEventListener('mousemove', onTimelineMouseMove);
     canvas.addEventListener('mouseup', onTimelineMouseUp);
@@ -509,16 +595,11 @@ function initTimelineCanvas() {
     canvas.addEventListener('contextmenu', onTimelineCtxMenu);
 }
 
-function pxToSec(px) {
-    return px / (timelineVP.pxPerSec || 1) + timelineVP.startSec;
-}
-function secToPx(sec) {
-    return (sec - timelineVP.startSec) * timelineVP.pxPerSec;
-}
+function pxToSec(px) { return px / (timelineVP.pxPerSec || 1) + timelineVP.startSec; }
+function secToPx(sec) { return (sec - timelineVP.startSec) * timelineVP.pxPerSec; }
 
 function assignLanes(clips) {
-    const laneEnds = [];
-    const result = [];
+    const laneEnds = []; const result = [];
     for (const c of clips) {
         let lane = 0;
         while (lane < laneEnds.length && laneEnds[lane] > c.start_sec) lane++;
@@ -526,8 +607,7 @@ function assignLanes(clips) {
         else laneEnds[lane] = c.end_sec;
         result.push({ ...c, lane });
     }
-    const maxLanes = Math.max(laneEnds.length, 1);
-    return { lanes: result, laneCount: maxLanes };
+    return { lanes: result, laneCount: Math.max(laneEnds.length, 1) };
 }
 
 function drawTimeline() {
@@ -536,18 +616,14 @@ function drawTimeline() {
     if (!canvas) return;
     const W = canvas.width / (window.devicePixelRatio || 1);
     const H = canvas.height / (window.devicePixelRatio || 1);
-
     ctx.clearRect(0, 0, W, H);
-
     if (!timelineClips.length) return;
 
     const totalEnd = Math.max(...timelineClips.map(c => c.end_sec), timelineClips[0].end_sec);
     timelineVP.startSec = Math.max(0, Math.min(timelineVP.startSec, totalEnd - 5));
-
     const pxPerSec = Math.max(timelineVP.pxPerSec, 2);
     timelineVP.pxPerSec = pxPerSec;
 
-    // Ruler
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, W, RULER_H);
     ctx.strokeStyle = '#333';
@@ -558,29 +634,21 @@ function drawTimeline() {
     ctx.font = '10px monospace';
     while (t <= timelineVP.startSec + W / pxPerSec) {
         const x = secToPx(t);
-        ctx.beginPath();
-        ctx.moveTo(x, RULER_H - 8);
-        ctx.lineTo(x, RULER_H);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, RULER_H - 8); ctx.lineTo(x, RULER_H); ctx.stroke();
         ctx.fillText(fmtTs(t), x + 3, RULER_H - 3);
         t += tickStep;
     }
 
-    // Lanes
     const { lanes, laneCount } = assignLanes(timelineClips);
     const laneH = Math.max(CLIP_MIN_H, (H - CLIP_TOP - 4) / laneCount);
 
-    // Selected pointer
     if (currentClip) {
         const cx = secToPx(currentClip.start_sec + (currentClip.end_sec - currentClip.start_sec) / 2);
         if (cx >= -10 && cx <= W + 10) {
             ctx.fillStyle = '#fff';
-            ctx.beginPath();
-            ctx.moveTo(cx, CLIP_TOP - 10);
-            ctx.lineTo(cx - 6, CLIP_TOP - 2);
-            ctx.lineTo(cx + 6, CLIP_TOP - 2);
-            ctx.closePath();
-            ctx.fill();
+            ctx.beginPath(); ctx.moveTo(cx, CLIP_TOP - 10);
+            ctx.lineTo(cx - 6, CLIP_TOP - 2); ctx.lineTo(cx + 6, CLIP_TOP - 2);
+            ctx.closePath(); ctx.fill();
         }
     }
 
@@ -591,50 +659,34 @@ function drawTimeline() {
         const h = laneH - 4;
         const isCurrent = currentClip && currentClip.clip_id === c.clip_id;
 
-        // Clip body
         const color = STATUS_COLORS[c.status] || '#2a2a3e';
         ctx.fillStyle = isCurrent ? brighten(color, 30) : color;
-        roundRect(ctx, x, y, w, h, 4);
-        ctx.fill();
+        roundRect(ctx, x, y, w, h, 4); ctx.fill();
 
-        // Sign crosshatch
         if (c.status === 'sign') {
-            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
             for (let sx = x + 4; sx < x + w; sx += 8) {
-                ctx.beginPath();
-                ctx.moveTo(sx, y);
-                ctx.lineTo(sx + 8, y + h);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx + 8, y + h); ctx.stroke();
             }
         }
 
-        // Border
         ctx.strokeStyle = isCurrent ? '#fff' : '#0f3460';
         ctx.lineWidth = isCurrent ? 2 : 1;
-        roundRect(ctx, x, y, w, h, 4);
-        ctx.stroke();
+        roundRect(ctx, x, y, w, h, 4); ctx.stroke();
 
-        // Label
         ctx.fillStyle = '#ccc';
         ctx.font = `${Math.max(9, Math.min(11, h * 0.4))}px monospace`;
         ctx.textAlign = 'center';
         const label = c.clip_id;
         const textW = ctx.measureText(label).width;
-        if (w > textW + 8) {
-            ctx.fillText(label, x + w / 2, y + h / 2 + 4);
-        }
+        if (w > textW + 8) ctx.fillText(label, x + w / 2, y + h / 2 + 4);
 
-        // Audio bar
         const offsetPx = c.audio_offset_ms / 1000 * pxPerSec;
         const audioDur = (c.end_sec - c.start_sec) * pxPerSec;
-        const ax = x + offsetPx;
-        const aw = Math.max(audioDur, 6);
+        const ax = x + offsetPx, aw = Math.max(audioDur, 6);
         ctx.fillStyle = 'rgba(233,69,96,0.25)';
-        roundRect(ctx, ax, y + h - 6, aw, 6, 2);
-        ctx.fill();
+        roundRect(ctx, ax, y + h - 6, aw, 6, 2); ctx.fill();
 
-        // Drag handles
         if (isCurrent) {
             ctx.fillStyle = '#fff';
             ctx.fillRect(x - 3, y, 6, h);
@@ -653,145 +705,94 @@ function brighten(hex, amount) {
 
 function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
     ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
 }
 
 function hitTestTimeline(mx, my) {
-    const { lanes } = assignLanes(timelineClips);
+    const { lanes, laneCount } = assignLanes(timelineClips);
+    const laneH = Math.max(CLIP_MIN_H, (timelineCtx.canvas.height / (window.devicePixelRatio || 1) - CLIP_TOP - 4) / Math.max(laneCount, 1));
     for (const c of lanes) {
         const x = secToPx(c.start_sec);
         const w = Math.max((c.end_sec - c.start_sec) * timelineVP.pxPerSec, 4);
-        const laneH = Math.max(CLIP_MIN_H, (timelineCtx.canvas.height / (window.devicePixelRatio || 1) - CLIP_TOP - 4) / Math.max(assignLanes(timelineClips).laneCount, 1));
         const y = CLIP_TOP + c.lane * laneH + 2;
         const h = laneH - 4;
-
         const offsetPx = c.audio_offset_ms / 1000 * timelineVP.pxPerSec;
-        const audioDur = (c.end_sec - c.start_sec) * timelineVP.pxPerSec;
         const ax = x + offsetPx;
-        const aw = Math.max(audioDur, 6);
+        const aw = Math.max((c.end_sec - c.start_sec) * timelineVP.pxPerSec, 6);
 
-        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x + w - 5 && mx <= x + w + 5 && my >= y && my <= y + h) {
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x + w - 5 && mx <= x + w + 5 && my >= y && my <= y + h)
             return { type: 'handle-end', clipId: c.clip_id };
-        }
-        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x - 5 && mx <= x + 5 && my >= y && my <= y + h) {
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= x - 5 && mx <= x + 5 && my >= y && my <= y + h)
             return { type: 'handle-start', clipId: c.clip_id };
-        }
-        if (currentClip && currentClip.clip_id === c.clip_id && mx >= ax && mx <= ax + aw && my >= y + h - 8 && my <= y + h) {
+        if (currentClip && currentClip.clip_id === c.clip_id && mx >= ax && mx <= ax + aw && my >= y + h - 8 && my <= y + h)
             return { type: 'audio-handle', clipId: c.clip_id };
-        }
-        if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
+        if (mx >= x && mx <= x + w && my >= y && my <= y + h)
             return { type: 'clip', clipId: c.clip_id };
-        }
     }
     return { type: 'empty', clipId: null };
 }
 
 function onTimelineMouseDown(e) {
     const rect = e.target.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     const hit = hitTestTimeline(mx, my);
-
-    timelineDrag = {
-        type: hit.type,
-        clipId: hit.clipId,
-        startX: mx,
-        startSec: timelineVP.startSec,
-        origStart: null,
-        origEnd: null,
-        origOffset: null,
-    };
-
+    timelineDrag = { type: hit.type, clipId: hit.clipId, startX: mx, startSec: timelineVP.startSec,
+                     origStart: null, origEnd: null, origOffset: null };
     if (hit.type === 'handle-start' || hit.type === 'handle-end' || hit.type === 'audio-handle') {
         const c = timelineClips.find(cl => cl.clip_id === hit.clipId);
-        if (c) {
-            timelineDrag.origStart = c.start_sec;
-            timelineDrag.origEnd = c.end_sec;
-            timelineDrag.origOffset = c.audio_offset_ms;
-        }
+        if (c) { timelineDrag.origStart = c.start_sec; timelineDrag.origEnd = c.end_sec; timelineDrag.origOffset = c.audio_offset_ms; }
     } else if (hit.type === 'empty') {
-        timelineDrag.type = 'pan';
-        e.target.style.cursor = 'grabbing';
+        timelineDrag.type = 'pan'; e.target.style.cursor = 'grabbing';
     }
 }
 
 function onTimelineMouseMove(e) {
     const rect = e.target.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     if (!timelineDrag) {
         const hit = hitTestTimeline(mx, my);
-        if (hit.type === 'handle-start' || hit.type === 'handle-end') {
-            e.target.style.cursor = 'ew-resize';
-        } else if (hit.type === 'audio-handle') {
-            e.target.style.cursor = 'ew-resize';
-        } else if (hit.type === 'clip') {
-            e.target.style.cursor = 'pointer';
-        } else {
-            e.target.style.cursor = 'grab';
-        }
+        if (hit.type === 'handle-start' || hit.type === 'handle-end' || hit.type === 'audio-handle') e.target.style.cursor = 'ew-resize';
+        else if (hit.type === 'clip') e.target.style.cursor = 'pointer';
+        else e.target.style.cursor = 'grab';
         return;
     }
-
     if (timelineDrag.type === 'pan') {
         const dx = (mx - timelineDrag.startX) / timelineVP.pxPerSec;
         timelineVP.startSec = Math.max(0, timelineDrag.startSec - dx);
-        drawTimeline();
-        return;
+        drawTimeline(); return;
     }
-
     if (!timelineDrag.clipId) return;
     const clip = timelineClips.find(c => c.clip_id === timelineDrag.clipId);
     if (!clip) return;
-
     const dt = (mx - timelineDrag.startX) / timelineVP.pxPerSec;
-
     if (timelineDrag.type === 'handle-start') {
         clip.start_sec = Math.max(0, timelineDrag.origStart + dt);
         if (clip.start_sec >= clip.end_sec - 0.1) clip.start_sec = clip.end_sec - 0.1;
-        drawTimeline();
     } else if (timelineDrag.type === 'handle-end') {
         clip.end_sec = Math.max(clip.start_sec + 0.1, timelineDrag.origEnd + dt);
-        drawTimeline();
     } else if (timelineDrag.type === 'audio-handle') {
         clip.audio_offset_ms = Math.max(-clip.start_sec * 1000, timelineDrag.origOffset + dt * 1000);
-        drawTimeline();
     }
+    drawTimeline();
 }
 
 async function onTimelineMouseUp(e) {
     e.target.style.cursor = 'grab';
     if (!timelineDrag) return;
-
-    const drag = timelineDrag;
-    timelineDrag = null;
-
+    const drag = timelineDrag; timelineDrag = null;
     if (drag.type === 'pan') return;
-
     if (!drag.clipId) return;
     const clip = timelineClips.find(c => c.clip_id === drag.clipId);
     if (!clip) return;
-
     if (drag.type === 'handle-start' || drag.type === 'handle-end') {
-        await api(`/api/clips/${drag.clipId}/resize`, {
-            method: 'POST',
-            body: { start_sec: clip.start_sec, end_sec: clip.end_sec },
-        });
+        await api(`/api/clips/${drag.clipId}/resize`, { method: 'POST', body: { start_sec: clip.start_sec, end_sec: clip.end_sec } });
     } else if (drag.type === 'audio-handle') {
-        await api(`/api/clips/${drag.clipId}/audio-offset`, {
-            method: 'POST',
-            body: { offset_ms: clip.audio_offset_ms },
-        });
+        await api(`/api/clips/${drag.clipId}/audio-offset`, { method: 'POST', body: { offset_ms: clip.audio_offset_ms } });
     } else if (drag.type === 'clip') {
         loadClip(drag.clipId);
     }
@@ -811,56 +812,38 @@ function onTimelineWheel(e) {
 function onTimelineCtxMenu(e) {
     e.preventDefault();
     const rect = e.target.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const hit = hitTestTimeline(mx, my);
+    const hit = hitTestTimeline(e.clientX - rect.left, e.clientY - rect.top);
     if (!hit.clipId) return;
     timelineCtxMenuClipId = hit.clipId;
     const menu = document.getElementById('timeline-menu');
-    menu.style.display = 'block';
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
+    menu.style.display = 'block'; menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px';
     setTimeout(() => document.addEventListener('click', hideCtxMenu, { once: true }), 0);
 }
-
-function hideCtxMenu() {
-    document.getElementById('timeline-menu').style.display = 'none';
-}
+function hideCtxMenu() { document.getElementById('timeline-menu').style.display = 'none'; }
 
 async function ctxDelete() {
     if (!timelineCtxMenuClipId) return;
     await api(`/api/clips/${timelineCtxMenuClipId}/delete`, { method: 'POST' });
-    hideCtxMenu();
-    await loadTimeline();
-    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) {
-        nextClip();
-    }
+    hideCtxMenu(); await loadTimeline();
+    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) nextClip();
 }
-
 async function ctxToggleSign() {
     if (!timelineCtxMenuClipId) return;
     const clip = timelineClips.find(c => c.clip_id === timelineCtxMenuClipId);
     const newStatus = (clip && clip.status === 'sign') ? 'pending' : 'sign';
     await api(`/api/clips/${timelineCtxMenuClipId}/status`, { method: 'POST', body: { status: newStatus } });
-    hideCtxMenu();
-    await loadTimeline();
-    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) {
-        currentClip.status = newStatus;
-        renderClip();
-    }
+    hideCtxMenu(); await loadTimeline();
+    if (currentClip && currentClip.clip_id === timelineCtxMenuClipId) { currentClip.status = newStatus; renderClip(); }
 }
 
 // ── Timeline data ─────────────────────────────
 
 async function loadTimeline() {
     try {
-        const data = await api('/api/timeline');
-        timelineClips = data;
-        totalClips = data.length;
+        timelineClips = await api('/api/timeline');
         drawTimeline();
     } catch (e) { console.error(e); }
 }
-
 function onVideoTimeUpdate() {}
 
 // ── Characters ───────────────────────────────
@@ -870,30 +853,22 @@ async function loadCharacters() {
         characters = await api('/api/characters');
         const sel = document.getElementById('char-select');
         sel.innerHTML = '<option value="">-- none --</option>' +
-            Object.keys(characters).map(name =>
-                `<option value="${name}">${name}</option>`
-            ).join('');
+            Object.keys(characters).map(name => `<option value="${name}">${name}</option>`).join('');
     } catch (e) { characters = {}; }
 }
-
 function toggleCharPanel() {
     const panel = document.getElementById('char-panel');
     panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
     renderCharPanel();
 }
-
 function renderCharPanel() {
     const div = document.getElementById('char-list');
     div.innerHTML = Object.entries(characters).map(([name, moods]) =>
-        `<strong>${name}</strong><br>` +
-        Object.entries(moods).map(([mood]) =>
-            `<div>${mood}
-                <button onclick="deleteCharacter('${name}','${mood}')">del</button>
-            </div>`
+        `<strong>${name}</strong><br>` + Object.entries(moods).map(([mood]) =>
+            `<div>${mood} <button onclick="deleteCharacter('${name}','${mood}')">del</button></div>`
         ).join('')
     ).join('<hr>');
 }
-
 async function saveCharacter() {
     const c = currentClip;
     if (!c) return;
@@ -903,30 +878,22 @@ async function saveCharacter() {
     showOverlay('Saving...');
     try {
         await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
-        await loadCharacters();
-        renderClip();
+        await loadCharacters(); renderClip();
     } catch (e) { alert('Save failed: ' + e.message); }
     hideOverlay();
 }
-
 async function deleteCharacter(name, mood) {
     await api(`/api/characters/${name}/${mood}`, { method: 'DELETE' });
-    await loadCharacters();
-    renderCharPanel();
-    renderClip();
+    await loadCharacters(); renderCharPanel(); renderClip();
 }
-
 async function addCharacter() {
     const name = document.getElementById('new-char-name').value.trim();
     const mood = document.getElementById('new-char-mood').value.trim() || 'normal';
     if (!name) return alert('Enter a name');
-    const c = currentClip;
-    if (!c) return;
+    const c = currentClip; if (!c) return;
     try {
         await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
-        await loadCharacters();
-        renderCharPanel();
-        renderClip();
+        await loadCharacters(); renderCharPanel(); renderClip();
         document.getElementById('new-char-name').value = '';
         document.getElementById('new-char-mood').value = '';
     } catch (e) { alert('Add failed: ' + e.message); }
@@ -945,41 +912,36 @@ async function translateAll() {
     } catch (e) { alert('Translate all failed: ' + e.message); }
     hideOverlay();
 }
-
 async function cloneAll() {
     if (!confirm('Clone all translated clips?')) return;
     showOverlay('Cloning all...');
     try {
-        const resp = await api('/api/clone-all', { method: 'POST' });
+        await api('/api/clone-all', { method: 'POST' });
         await pollProgress('clone-all', 'Cloning');
         loadTimeline();
         if (currentClip) loadClip(currentClip.clip_id);
     } catch (e) { alert('Clone all failed: ' + e.message); }
     hideOverlay();
 }
-
 async function pollProgress(key, label) {
     let done = false;
     while (!done) {
         await sleep(200);
         try {
             const p = await api(`/api/${key}/progress`);
-            document.getElementById('overlay-msg').textContent =
-                `${label}... ${p.current}/${p.total}`;
+            document.getElementById('overlay-msg').textContent = `${label}... ${p.current}/${p.total}`;
             document.getElementById('bulk-status').textContent = p.message;
             if (p.done) done = true;
         } catch (e) { done = true; }
     }
     document.getElementById('bulk-status').textContent = `${label} complete.`;
 }
-
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function saveProject() {
     await api('/api/save', { method: 'POST' });
     document.getElementById('bulk-status').textContent = 'Saved.';
 }
-
 async function assembleFull() {
     if (!confirm('Assemble full episode?')) return;
     showOverlay('Assembling...');
@@ -989,14 +951,11 @@ async function assembleFull() {
     } catch (e) { alert('Assemble failed: ' + e.message); }
     hideOverlay();
 }
-
 function fmtTs(sec) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = (sec % 60).toFixed(1);
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(4, '0')}`;
 }
-
-// ── Init ─────────────────────────────────────
 
 loadProjectPicker();

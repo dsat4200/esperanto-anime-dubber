@@ -10,40 +10,34 @@
 <header>
   <span class="logo">anidub-edit</span>
   <nav>
+    <button onclick="goHome()">Home</button>
     <button onclick="saveProject()">Save</button>
     <button onclick="assembleFull()">Assemble</button>
   </nav>
 </header>
 
 <main>
-  <!-- Setup panel -->
-  <div id="setup-panel" class="panel" style="display:flex">
-    <h2>Open Project</h2>
-
+  <!-- EPISODE HOME PANEL -->
+  <div id="home-panel" class="panel" style="display:flex">
     <div class="form-row">
-      <label>Existing project:</label>
       <select id="project-picker" onchange="onProjectPicker()"><option value="">-- load --</option></select>
       <button onclick="loadSelectedProject()">Load</button>
-    </div>
-
-    <div class="form-row">
-      <label>Or new from anime folder:</label>
-      <input type="text" id="anime-name" placeholder="hxh">
+      <input type="text" id="anime-name" placeholder="anime folder name">
       <button onclick="openAnime()">Create Project</button>
     </div>
-
-    <div id="tracks-section" style="display:none">
-      <h3>Audio Tracks</h3>
-      <div id="audio-tracks"></div>
-      <h3>Subtitle Tracks</h3>
-      <div id="sub-tracks"></div>
-      <button id="btn-demucs" onclick="runDemucs()">Run Demucs</button>
-      <button id="btn-start" onclick="startEditing()" style="display:none">Start Editing</button>
-      <div id="demucs-status"></div>
+    <div id="home-episodes" style="display:none">
+      <div class="home-header">
+        <h2 id="home-title"></h2>
+        <div id="batch-actions" style="display:none">
+          <button onclick="batchTranslate()">Batch Translate (<span class="sel-count">0</span>)</button>
+          <button onclick="batchClone()">Batch Clone (<span class="sel-count">0</span>)</button>
+        </div>
+      </div>
+      <div id="episode-grid"></div>
     </div>
   </div>
 
-  <!-- Editor panel -->
+  <!-- EDITOR PANEL -->
   <div id="editor-panel" class="panel" style="display:none">
     <div id="editor-left">
       <video id="video-player" controls></video>
@@ -87,11 +81,11 @@
 
       <div class="field">
         <label>Additional clone instructions:</label>
-        <textarea id="instruct-extra" rows="2" placeholder="extra pronunciation / delivery notes for Esperanto TTS"></textarea>
+        <textarea id="instruct-extra" rows="2"></textarea>
       </div>
 
       <div class="field">
-        <label>Duration of dialogue (<span id="speed-val">1.00</span>x):</label>
+        <label>Dialogue speed (<span id="speed-val">1.00</span>x):</label>
         <input type="range" id="speed-slider" min="50" max="200" value="100" step="1" onchange="onSpeedChange(this.value)">
       </div>
 
@@ -110,18 +104,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Character panel -->
-  <div id="char-panel" class="panel side-panel" style="display:none">
-    <h3>Characters <button onclick="toggleCharPanel()">X</button></h3>
-    <div id="char-list"></div>
-    <div class="form-row">
-      <input type="text" id="new-char-name" placeholder="Name">
-      <input type="text" id="new-char-mood" placeholder="mood (normal)">
-      <button onclick="addCharacter()">Add</button>
-    </div>
-    <p class="hint">"Add" copies current clip's ref.wav as a character voice print.</p>
-  </div>
 </main>
 
 <!-- Bulk bar -->
@@ -136,10 +118,24 @@
   <canvas id="timeline-canvas"></canvas>
 </div>
 
-<!-- Context menu -->
+<!-- Timeline context menu -->
 <div id="timeline-menu" class="ctx-menu" style="display:none">
   <div onclick="ctxDelete()">Delete clip</div>
   <div onclick="ctxToggleSign()">Toggle sign/audio</div>
+</div>
+
+<!-- Track pick modal -->
+<div id="track-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <h3>Select Tracks for Batch</h3>
+    <p class="modal-hint">Applied to all selected episodes. Episodes with different counts will be skipped.</p>
+    <div id="modal-audio-tracks"></div>
+    <div id="modal-sub-tracks"></div>
+    <div class="modal-btns">
+      <button class="primary" onclick="confirmBatchTracks()">Run</button>
+      <button onclick="cancelBatchTracks()">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <!-- Status overlay -->
