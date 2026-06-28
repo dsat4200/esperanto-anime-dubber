@@ -1350,6 +1350,14 @@ async function generatePlaybackPreviews() {
     }
     hideOverlay();
 }
+async function deletePlaybackPreviews() {
+    if (!confirm('Delete all playback previews? You can regenerate with "Generate Previews".')) return;
+    try {
+        const resp = await api('/api/playback/delete-previews', { method: 'POST' });
+        alert('Deleted ' + resp.deleted + ' previews.');
+        if (playback.mode === 'on') await refreshPlaybackPlan();
+    } catch (e) { alert('Delete failed: ' + e.message); }
+}
 function fmtTs(sec) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
@@ -1717,7 +1725,9 @@ function updatePlaybackOverlay(seg) {
     const overlay = document.getElementById('subtitle-overlay');
     if (!overlay) return;
     if (seg.kind !== 'clip') { overlay.classList.remove('active'); overlay.innerHTML = ''; return; }
-    if (seg.has_preview) { overlay.classList.remove('active'); overlay.innerHTML = ''; return; }
+    if (seg.clip_id === '__op__' || seg.clip_id === '__ed__') {
+        overlay.classList.remove('active'); overlay.innerHTML = ''; return;
+    }
     const text = seg.translated_text || seg.original_text || '';
     if (!text.trim() || seg.status === 'non_dub' || seg.status === 'sign') {
         overlay.classList.remove('active'); overlay.innerHTML = ''; return;

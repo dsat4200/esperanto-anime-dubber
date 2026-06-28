@@ -61,6 +61,7 @@
   "bulk.translate_all": "Traduku Ĉion",
   "bulk.clone_all": "Klonu Ĉion",
   "bulk.generate_previews": "Generi Antaŭrigardojn",
+  "bulk.delete_previews": "Forigi Antaŭrigardojn",
   "bulk.status_saved": "Savita.",
   "bulk.status_complete": "Kompleta.",
   "bulk.done_failed_template": "Done — {count} episode(s) failed: {stems}{more}",

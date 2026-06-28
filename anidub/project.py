@@ -622,6 +622,61 @@ class Project:
             out_dir=line_dir,
         )
 
+    def preview_playback_clip(self, clip_id: str, *,
+                               no_vocals_cache: Path | None = None,
+                               tts_wav: Path | None = None,
+                               start_sec: float | None = None,
+                               end_sec: float | None = None,
+                               offset_ms: float = 0.0,
+                               out_dir: Path | None = None) -> Path:
+        """Generate a no-subtitle ``playback.mp4`` for overlay-mode playback."""
+        entry = self._get_clip_entry(clip_id)
+        from anidub.assembler import preview_playback_clip as _pb_clip
+
+        if no_vocals_cache is None:
+            no_vocals_cache = self.path / "no_vocals.wav"
+            if not no_vocals_cache.exists():
+                self.run_demucs()
+
+        if tts_wav is None:
+            if not entry.get("clone_path"):
+                raise RuntimeError(f"Clip {clip_id} has not been cloned")
+            tts_wav = self._abs(entry["clone_path"])
+        if start_sec is None:
+            start_sec = float(entry["start_sec"])
+        if end_sec is None:
+            end_sec = float(entry["end_sec"])
+        if out_dir is None:
+            out_dir = self.path / "lines" / clip_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+        if offset_ms == 0.0:
+            offset_ms = entry.get("audio_offset_ms", 0.0)
+
+        return _pb_clip(
+            video_only=self._abs(self.state["video_only"]),
+            no_vocals=no_vocals_cache,
+            tts_wav=tts_wav,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            offset_ms=offset_ms,
+            out_dir=Path(out_dir),
+        )
+
+    def delete_playback_previews(self) -> int:
+        """Remove all ``playback.mp4`` from line dirs + OP/ED cache. Returns count."""
+        count = 0
+        order = self.state.get("order", [])
+        for cid in order:
+            pb = self.path / "lines" / cid / "playback.mp4"
+            if pb.exists():
+                pb.unlink()
+                count += 1
+        pb_dir = self.path / "_playback"
+        if pb_dir.is_dir():
+            import shutil
+            shutil.rmtree(str(pb_dir), ignore_errors=True)
+        return count
+
     def set_clip_offset(self, clip_id: str, offset_ms: float):
         self.set_audio_offset(clip_id, offset_ms)
 

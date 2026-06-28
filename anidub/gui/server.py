@@ -1019,11 +1019,17 @@ def api_playback_segment():
     start = request.args.get("start")
     end = request.args.get("end")
 
-    # ── cloned clip with existing preview ──
+    # ── OP / ED placeholders ──
+    if clip_id in ("__op__", "__ed__"):
+        pb = proj.path / "_playback" / (clip_id[2:] + ".mp4")
+        if pb.exists() and pb.stat().st_size > 1024:
+            return _send_file_range(str(pb), "video/mp4")
+
+    # ── cloned clip with existing playback.mp4 ──
     if clip_id:
-        preview_mp4 = proj.path / "lines" / clip_id / "preview.mp4"
-        if preview_mp4.exists() and preview_mp4.stat().st_size > 1024:
-            return _send_file_range(str(preview_mp4), "video/mp4")
+        playback_mp4 = proj.path / "lines" / clip_id / "playback.mp4"
+        if playback_mp4.exists() and playback_mp4.stat().st_size > 1024:
+            return _send_file_range(str(playback_mp4), "video/mp4")
 
     # ── known time range → slice video_only + original audio ──
     clip_start = start
@@ -1075,38 +1081,108 @@ def api_playback_generate_previews():
     if err: return err
     proj = _anime.get_active_project()
     order = list(proj.state.get("order", []))
-    total = len(order)
+    op_s, op_e = proj.state.get("op_range", (0.0, 0.0))
+    ed_s, ed_e = proj.state.get("ed_range", (0.0, 0.0))
+
+    # Count OP/ED as extra items
+    extra = 0
+    if op_e > op_s:
+        extra += 1
+    if ed_e > ed_s:
+        extra += 1
+    total = len(order) + extra
     key = "playback-previews"
 
     def _run():
-        _jobs[key] = {"running": True, "cancel": False, "type": "playback-previews",
-                      "message": "Generating previews..."}
         processed = 0
         failed: list[dict] = []
         try:
+            _jobs[key] = {"running": True, "cancel": False, "type": "playback-previews",
+                          "message": "Generating previews..."}
             _progress[key] = {"current": 0, "total": total, "done": False,
                               "message": "Generating...", "failed": []}
+
+            # ── OP as one full segment ──
+            if op_e > op_s:
+                _progress[key]["message"] = "OP..."
+                _jobs[key]["message"] = "OP..."
+                try:
+                    op_dir = proj.path / "_playback"
+                    op_dir.mkdir(parents=True, exist_ok=True)
+                    from anidub.assembler import _slice_audio
+                    from anidub.extract import extract_video_clip
+                    from anidub.assembler import _mux_playback
+                    no_vocals_cache = proj.path / "no_vocals.wav"
+                    if not no_vocals_cache.exists():
+                        proj.run_demucs()
+                    video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
+                    op_dur = op_e - op_s
+                    bg = op_dir / "_op_bg.wav"
+                    _slice_audio(no_vocals_cache, op_s, op_dur, bg)
+                    audio_src = proj._audio_path()
+                    audio_clip = op_dir / "_op_audio.wav"
+                    _slice_audio(audio_src, op_s, op_dur, audio_clip)
+                    op_video = op_dir / "_op_video.mkv"
+                    extract_video_clip(video_src, op_s, op_e, op_video)
+                    op_out = op_dir / "op.mp4"
+                    _mux_playback(op_video, audio_clip, op_out)
+                    processed += 1
+                except Exception as e:
+                    failed.append({"clip_id": "__op__", "error": str(e)})
+                _progress[key]["current"] = 1
+
+            # ── ED as one full segment ──
+            if ed_e > ed_s:
+                _progress[key]["message"] = "ED..."
+                _jobs[key]["message"] = "ED..."
+                try:
+                    ed_dir = proj.path / "_playback"
+                    ed_dir.mkdir(parents=True, exist_ok=True)
+                    from anidub.assembler import _slice_audio
+                    from anidub.extract import extract_video_clip
+                    from anidub.assembler import _mux_playback
+                    no_vocals_cache = proj.path / "no_vocals.wav"
+                    if not no_vocals_cache.exists():
+                        proj.run_demucs()
+                    video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
+                    ed_dur = ed_e - ed_s
+                    bg = ed_dir / "_ed_bg.wav"
+                    _slice_audio(no_vocals_cache, ed_s, ed_dur, bg)
+                    audio_src = proj._audio_path()
+                    ed_audio = ed_dir / "_ed_audio.wav"
+                    _slice_audio(audio_src, ed_s, ed_dur, ed_audio)
+                    ed_video = ed_dir / "_ed_video.mkv"
+                    extract_video_clip(video_src, ed_s, ed_e, ed_video)
+                    ed_out = ed_dir / "ed.mp4"
+                    _mux_playback(ed_video, ed_audio, ed_out)
+                    processed += 1
+                except Exception as e:
+                    failed.append({"clip_id": "__ed__", "error": str(e)})
+                _progress[key]["current"] = (1 if op_e > op_s else 0) + 1
+
+            # ── Per-clip playback previews ──
             for i, cid in enumerate(order):
                 if _jobs[key].get("cancel"):
                     break
                 clip = proj.get_clip(cid)
+                idx = extra + i + 1
                 if not clip or not clip.clone_path:
-                    _progress[key]["current"] = i + 1
+                    _progress[key]["current"] = idx
                     continue
                 if clip.status in (ClipStatus.NON_DUB, ClipStatus.SIGN):
-                    _progress[key]["current"] = i + 1
+                    _progress[key]["current"] = idx
                     continue
-                # Skip clips that already have a preview
-                preview_mp4 = proj.path / "lines" / cid / "preview.mp4"
-                if preview_mp4.exists() and preview_mp4.stat().st_size > 1024:
-                    _progress[key]["current"] = i + 1
+                playback_mp4 = proj.path / "lines" / cid / "playback.mp4"
+                if playback_mp4.exists() and playback_mp4.stat().st_size > 1024:
+                    _progress[key]["current"] = idx
+                    processed += 1
                     continue
                 try:
-                    proj.preview_clip(cid)
+                    proj.preview_playback_clip(cid)
                     processed += 1
                 except Exception as e:
                     failed.append({"clip_id": cid, "error": str(e)})
-                _progress[key]["current"] = i + 1
+                _progress[key]["current"] = idx
                 _progress[key]["message"] = f"{processed}/{total}"
                 _jobs[key]["message"] = _progress[key]["message"]
             _progress[key]["done"] = True
@@ -1124,6 +1200,15 @@ def api_playback_generate_previews():
 def api_playback_generate_previews_progress():
     return jsonify(_progress.get("playback-previews",
                                  {"current": 0, "total": 0, "done": True, "message": ""}))
+
+
+@app.route("/api/playback/delete-previews", methods=["POST"])
+def api_playback_delete_previews():
+    err = _require_project()
+    if err: return err
+    proj = _anime.get_active_project()
+    count = proj.delete_playback_previews()
+    return jsonify({"deleted": count})
 
 
 @app.route("/api/preview-raw", methods=["POST"])

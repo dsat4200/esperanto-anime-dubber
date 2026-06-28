@@ -126,6 +126,25 @@ def _mux_preview(
     ], check=True)
 
 
+def _mux_playback(
+    video_path: Path,
+    audio_path: Path,
+    out_path: Path,
+):
+    """Mux video + audio, no subtitle burn. For overlay-mode playback."""
+    bin_path = _ffmpeg_bin()
+    subprocess.run([
+        bin_path, "-y", "-loglevel", "error",
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-shortest",
+        str(out_path),
+    ], check=True)
+
+
 def assemble_line(
     mkv_path: Path,
     line: dict,
@@ -227,6 +246,57 @@ def preview_clip(
     preview = out_dir / "preview.mp4"
     _mux_preview(video_clip, dubbed, sub_ass, preview)
     return preview
+
+
+def preview_playback_clip(
+    video_only: Path,
+    no_vocals: Path,
+    tts_wav: Path,
+    start_sec: float,
+    end_sec: float,
+    offset_ms: float = 0.0,
+    out_dir: Path | None = None,
+) -> Path:
+    """Same audio-mix as preview_clip but no subtitle burn.  Outputs
+    ``playback.mp4`` so the frontend can overlay subtitles live."""
+    out_dir = Path(out_dir) if out_dir else Path(".")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    dur = end_sec - start_sec
+
+    bg_clip = out_dir / "no_vocals_clip.wav"
+    _slice_audio(no_vocals, start_sec, dur, bg_clip)
+
+    voice_input = tts_wav
+    delay_ms = offset_ms
+    if offset_ms < -1:
+        from tempfile import NamedTemporaryFile
+        trim_fd = NamedTemporaryFile(suffix=".wav", delete=False)
+        trim_fd.close()
+        trim_path = Path(trim_fd.name)
+        bin_path = _ffmpeg_bin()
+        trim_start = abs(offset_ms) / 1000.0
+        subprocess.run([bin_path, "-y", "-loglevel", "error",
+                        "-ss", f"{trim_start:.3f}",
+                        "-i", str(tts_wav),
+                        "-c:a", "pcm_s16le",
+                        str(trim_path)], check=True)
+        voice_input = trim_path
+        delay_ms = 0
+
+    dubbed = out_dir / "dubbed.wav"
+    _mix_background_voice(bg_clip, voice_input, dubbed, delay_ms=delay_ms)
+
+    if voice_input != tts_wav:
+        voice_input.unlink(missing_ok=True)
+
+    video_clip = out_dir / "video_only.mkv"
+    from anidub.extract import extract_video_clip
+    extract_video_clip(video_only, start_sec, start_sec + dur, video_clip)
+
+    out = out_dir / "playback.mp4"
+    _mux_playback(video_clip, dubbed, out)
+    return out
 
 
 def assemble_full(
