@@ -1103,6 +1103,50 @@ def serve_preview(clip_id):
     )
 
 
+# ── Playback Mode ─────────────────────────────
+
+@app.route("/api/playback-video", methods=["POST"])
+def api_playback_video():
+    err = _require_project()
+    if err: return err
+    proj = _anime.get_active_project()
+    stem = _anime._active_stem
+    playback_path = proj.path / "playback.mp4"
+
+    if not playback_path.exists():
+        video_only = proj._abs(proj.state.get("video_only", "video_only.mkv"))
+        audio = proj._audio_path()
+        if not video_only.exists():
+            return jsonify({"error": "video_only.mkv not found"}), 404
+        ffmpeg = str(Path(get_ffmpeg_location()) / "ffmpeg.exe")
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-i", str(video_only),
+        ]
+        if audio and audio.exists():
+            cmd += ["-i", str(audio)]
+        cmd += [
+            "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(playback_path),
+        ]
+        sp.run(cmd, check=True)
+
+    return jsonify({"url": f"/playback/{stem}.mp4"})
+
+
+@app.route("/playback/<stem>.mp4")
+def serve_playback(stem):
+    err = _require_anime()
+    if err: return err
+    proj = _anime.select_episode(stem)
+    playback_path = proj.path / "playback.mp4"
+    if not playback_path.exists():
+        return jsonify({"error": "playback.mp4 not found"}), 404
+    return _send_file_range(str(playback_path), "video/mp4")
+
+
 # ── Jobs ─────────────────────────────────────
 
 @app.route("/api/jobs")
