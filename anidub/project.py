@@ -111,7 +111,7 @@ class Project:
                 "audio_track_rel": 0 if audio_count == 1 else -1,
                 "subtitle_track_rel": 0 if sub_count == 1 else -1,
             },
-            "tracks_confirmed": audio_count <= 1 and sub_count <= 1,
+            "tracks_confirmed": audio_count == 1 and sub_count == 1,
             "tracks": {
                 "audio": [
                     {
@@ -168,7 +168,7 @@ class Project:
             if "tracks_confirmed" not in self.state:
                 audio_count = len(self.state.get("tracks", {}).get("audio", []))
                 sub_count = len(self.state.get("tracks", {}).get("subtitle", []))
-                self.state["tracks_confirmed"] = audio_count <= 1 and sub_count <= 1
+                self.state["tracks_confirmed"] = audio_count == 1 and sub_count == 1
                 self.save()
             return
         old_tl = self.state.get("timeline", [])
@@ -209,7 +209,7 @@ class Project:
         if "tracks_confirmed" not in self.state:
             audio_count = len(self.state.get("tracks", {}).get("audio", []))
             sub_count = len(self.state.get("tracks", {}).get("subtitle", []))
-            self.state["tracks_confirmed"] = audio_count <= 1 and sub_count <= 1
+            self.state["tracks_confirmed"] = audio_count == 1 and sub_count == 1
         self.save()
 
     # ═══════════════════════════════════════════
