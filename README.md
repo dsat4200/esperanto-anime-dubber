@@ -1,9 +1,6 @@
 # Esperanto Anime Dubber
-*Amuzu vin. Por esperanto, vidu README_eo.md*
 
 Anime dubbing pipeline: separate audio into background + vocals, translate Japanese subtitles to Esperanto, then generate Esperanto voice tracks using the OmniVoice (k2-fsa) TTS model. All dubbing work happens in a browser-based editor — no CLI workflow commands required.
-
-
 ![alt text](screenshots/image-8.png)
 ## Disclaimer / Why?
 
@@ -18,10 +15,10 @@ Anime dubbing pipeline: separate audio into background + vocals, translate Japan
 | **Python** | 3.10+ |
 
 It may not work on other GPUs, CUDA versions, or operating systems. Uses `~6 GB` of VRAM during inference. First run downloads `~2.5 GB` of model weights. **YMMV.**
-
-Theoretically this could be modified to translate any anime into any language, but there's not much of a need for that. 
+Theoretically this could be modified to translate any anime into any language, but there's not much of a need for that.
 
 Even though machine translation is imperfect, I hope to provide the tools for anyone to make their own translation, to the best of their ability, without investing immense time and resources into making a fan dub. Hopefully, this will make it much easier to get quality comprehensible input for Esperanto.
+
 
 ---
 

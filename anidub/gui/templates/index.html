@@ -68,12 +68,6 @@
     <div id="editor-left">
       <video id="video-player" controls></video>
 
-      <div id="transport-bar" class="transport-bar">
-        <button class="play-btn" onclick="transportTogglePlay()" data-i18n="playback.play">Play</button>
-        <button class="stop-btn" onclick="transportStop()" data-i18n="playback.stop">Stop</button>
-        <span class="transport-time" id="transport-time">00:00 / 00:00</span>
-      </div>
-
       <div class="field clone-only">
         <label><span data-i18n="editor.audio_shift_pre">Audio shift (</span><span id="audio-shift-val">0</span><span data-i18n="editor.audio_shift_post">ms):</span></label>
         <input type="range" id="audio-shift-slider" min="-500" max="500" value="0" step="10" onchange="onAudioShiftChange(this.value)">
@@ -107,7 +101,6 @@
         <select id="episode-select" onchange="switchEpisode(this.value)"><option data-i18n="editor.episode_select_default">--</option></select>
         <button onclick="prevClip()">&larr;</button>
         <button onclick="nextClip()">&rarr;</button>
-        <button onclick="togglePlaybackMode()" id="btn-playback-mode" data-i18n="playback.toggle_mode">Playback Mode</button>
       </div>
 
       <div class="field">

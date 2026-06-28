@@ -116,14 +116,6 @@
   "batch.status_skipped": "{count} skipped",
   "batch.cancel": "Cancel",
 
-  "playback.toggle_mode": "Playback Mode",
-  "playback.toggle_edit": "Edit Mode",
-  "playback.generating": "Generating playback video...",
-  "playback.play": "Play",
-  "playback.pause": "Pause",
-  "playback.stop": "Stop",
-  "playback.no_video": "Video not available",
-
   "alert.load_failed": "Load failed: ",
   "alert.create_failed": "Create failed: ",
   "alert.open_episode_failed": "Failed to open episode: ",

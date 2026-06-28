@@ -16,10 +16,6 @@ let timelineVP = { startSec: 0, pxPerSec: 50 };
 let timelineDrag = null;
 let timelineCtxMenuClipId = null;
 
-let playbackMode = false;
-let playbackVideoUrl = null;
-let playbackCurrentClipId = null;
-
 // ── i18n ─────────────────────────────────────
 let i18n = {};
 
@@ -262,7 +258,6 @@ async function openEpisode(stem) {
 }
 
 async function goHome() {
-    if (playbackMode) exitPlaybackMode();
     document.getElementById('editor-panel').style.display = 'none';
     document.getElementById('home-panel').style.display = 'flex';
     selectedEpisodes.clear();
@@ -270,76 +265,6 @@ async function goHome() {
     document.getElementById('job-bar').style.display = 'none';
     currentJobKey = null;
     await loadEpisodes(false);
-}
-
-// ── Playback Mode ────────────────────────────
-
-async function togglePlaybackMode() {
-    if (playbackMode) {
-        exitPlaybackMode();
-    } else {
-        await enterPlaybackMode();
-    }
-}
-
-async function enterPlaybackMode() {
-    showOverlay(t('playback.generating'));
-    try {
-        const resp = await api('/api/playback-video', { method: 'POST' });
-        playbackVideoUrl = resp.url;
-        const video = document.getElementById('video-player');
-        video.src = playbackVideoUrl + '?t=' + Date.now();
-        video.load();
-        video.controls = true;
-        playbackMode = true;
-        document.getElementById('transport-bar').style.display = 'flex';
-        document.getElementById('btn-playback-mode').textContent = t('playback.toggle_edit');
-        document.querySelectorAll('.clone-only').forEach(el => el.style.display = 'none');
-        document.querySelectorAll('.accept-only').forEach(el => el.style.display = 'none');
-        if (currentClip && currentClip.start_sec) video.currentTime = currentClip.start_sec;
-        video.onended = () => { document.querySelector('#transport-bar .play-btn').textContent = t('playback.play'); };
-        video.onpause = () => { document.querySelector('#transport-bar .play-btn').textContent = t('playback.play'); };
-        video.onplay = () => { document.querySelector('#transport-bar .play-btn').textContent = t('playback.pause'); };
-        await new Promise(resolve => { video.onloadedmetadata = resolve; });
-        drawTimeline();
-    } catch (e) { alert('Playback setup failed: ' + e.message); }
-    hideOverlay();
-}
-
-function exitPlaybackMode() {
-    playbackMode = false;
-    playbackVideoUrl = null;
-    playbackCurrentClipId = null;
-    const video = document.getElementById('video-player');
-    video.pause();
-    video.src = '';
-    video.controls = true;
-    document.getElementById('transport-bar').style.display = 'none';
-    document.getElementById('btn-playback-mode').textContent = t('playback.toggle_mode');
-    if (currentClip) renderClip();
-    drawTimeline();
-}
-
-function transportTogglePlay() {
-    const video = document.getElementById('video-player');
-    if (!video) return;
-    if (video.paused) {
-        video.play();
-        document.querySelector('#transport-bar .play-btn').textContent = t('playback.pause');
-    } else {
-        video.pause();
-        document.querySelector('#transport-bar .play-btn').textContent = t('playback.play');
-    }
-}
-
-function transportStop() {
-    const video = document.getElementById('video-player');
-    if (!video) return;
-    video.pause();
-    video.currentTime = 0;
-    document.querySelector('#transport-bar .play-btn').textContent = t('playback.play');
-    updateTransportTime(video);
-    drawTimeline();
 }
 
 async function setupEditorForActive() {
@@ -391,7 +316,6 @@ async function switchEpisode(stem) {
         activeStem = stem;
         hideOverlay();
         await setupEditor();
-        if (playbackMode) await enterPlaybackMode();
     } catch (e) {
         hideOverlay();
         alert(t('alert.switch_failed') + e.message);
@@ -414,14 +338,12 @@ async function loadClip(clipId) {
         const clip = await api('/api/clips/' + clipId);
         currentClip = clip;
         renderClip();
-        if (!playbackMode) {
-            if (clip.status === 'non_dub') {
-                loadRawPreview(clip.start_sec, clip.end_sec);
-            } else if (clip.needs_processing) {
-                await autoProcess(clipId);
-            } else if (clip.clone_path) {
-                await previewCurrent();
-            }
+        if (clip.status === 'non_dub') {
+            loadRawPreview(clip.start_sec, clip.end_sec);
+        } else if (clip.needs_processing) {
+            await autoProcess(clipId);
+        } else if (clip.clone_path) {
+            await previewCurrent();
         }
         drawTimeline();
     } catch (e) { console.error('loadClip failed:', e); }
@@ -467,9 +389,8 @@ function renderClip() {
     document.getElementById('clone-info').textContent = info.join('  |  ');
 
     const nd = c.status === 'non_dub' || c.status === 'sign';
-    const hide = nd || playbackMode;
-    document.querySelectorAll('.clone-only').forEach(el => el.style.display = hide ? 'none' : '');
-    document.querySelectorAll('.accept-only').forEach(el => el.style.display = hide ? 'none' : '');
+    document.querySelectorAll('.clone-only').forEach(el => el.style.display = nd ? 'none' : '');
+    document.querySelectorAll('.accept-only').forEach(el => el.style.display = nd ? 'none' : '');
 
     const btnSign = document.getElementById('btn-toggle-sign');
     btnSign.textContent = c.status === 'sign' ? t('editor.mark_vocal') : t('editor.mark_sign');
@@ -754,7 +675,7 @@ function watchBatchCompletion(key) {
                 delete _batchCompletionWatchers[key];
                 selectedEpisodes.clear();
                 updateSelectionUI();
-                await loadEpisodes(false);
+                await loadEpisodes();
                 await refreshEpisodeBars();
                 document.getElementById('bulk-status').textContent = t('bulk.status_complete');
             }
@@ -1125,26 +1046,6 @@ function drawTimeline() {
             ctx.fillRect(ax + aw - 3, y + h - 6, 6, 6);
         }
     }
-
-    if (playbackMode) {
-        const video = document.getElementById('video-player');
-        if (video && video.duration) {
-            const px = secToPx(video.currentTime);
-            ctx.strokeStyle = '#e94560';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(px, 0);
-            ctx.lineTo(px, H);
-            ctx.stroke();
-            ctx.fillStyle = '#e94560';
-            ctx.beginPath();
-            ctx.moveTo(px, 0);
-            ctx.lineTo(px - 5, RULER_H);
-            ctx.lineTo(px + 5, RULER_H);
-            ctx.closePath();
-            ctx.fill();
-        }
-    }
 }
 
 function brighten(hex, amount) {
@@ -1191,14 +1092,6 @@ function hitTestTimeline(mx, my) {
 function onTimelineMouseDown(e) {
     const rect = e.target.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    if (playbackMode && my < RULER_H) {
-        timelineDrag = { type: 'scrub', clipId: null, startX: mx, startSec: timelineVP.startSec,
-                         origStart: null, origEnd: null, origOffset: null };
-        const video = document.getElementById('video-player');
-        if (video && video.duration) video.currentTime = pxToSec(mx);
-        e.target.style.cursor = 'ew-resize';
-        return;
-    }
     const hit = hitTestTimeline(mx, my);
     timelineDrag = { type: hit.type, clipId: hit.clipId, startX: mx, startSec: timelineVP.startSec,
                      origStart: null, origEnd: null, origOffset: null };
@@ -1225,13 +1118,6 @@ function onTimelineMouseMove(e) {
         timelineVP.startSec = Math.max(0, timelineDrag.startSec - dx);
         drawTimeline(); return;
     }
-    if (timelineDrag.type === 'scrub') {
-        const video = document.getElementById('video-player');
-        if (video && video.duration) {
-            video.currentTime = Math.max(0, Math.min(video.duration, pxToSec(mx)));
-        }
-        drawTimeline(); return;
-    }
     if (!timelineDrag.clipId) return;
     const clip = timelineClips.find(c => c.clip_id === timelineDrag.clipId);
     if (!clip) return;
@@ -1252,7 +1138,6 @@ async function onTimelineMouseUp(e) {
     if (!timelineDrag) return;
     const drag = timelineDrag; timelineDrag = null;
     if (drag.type === 'pan') return;
-    if (drag.type === 'scrub') return;
     if (!drag.clipId) return;
     const clip = timelineClips.find(c => c.clip_id === drag.clipId);
     if (!clip) return;
@@ -1261,17 +1146,7 @@ async function onTimelineMouseUp(e) {
     } else if (drag.type === 'audio-handle') {
         await api(`/api/clips/${drag.clipId}/audio-offset`, { method: 'POST', body: { offset_ms: clip.audio_offset_ms } });
     } else if (drag.type === 'clip') {
-        if (playbackMode) {
-            const clip = timelineClips.find(c => c.clip_id === drag.clipId);
-            if (clip) {
-                const video = document.getElementById('video-player');
-                video.currentTime = clip.start_sec;
-                video.play();
-                document.querySelector('#transport-bar .play-btn').textContent = t('playback.pause');
-            }
-        } else {
-            loadClip(drag.clipId);
-        }
+        loadClip(drag.clipId);
     }
 }
 
@@ -1321,46 +1196,7 @@ async function loadTimeline() {
         drawTimeline();
     } catch (e) { console.error(e); }
 }
-function onVideoTimeUpdate() {
-    if (!playbackMode) return;
-    const video = document.getElementById('video-player');
-    if (!video || !video.duration) return;
-
-    updateTransportTime(video);
-
-    const W = document.getElementById('timeline-canvas').clientWidth;
-    const playheadPx = secToPx(video.currentTime);
-    const margin = W * 0.15;
-    if (playheadPx > W - margin) {
-        timelineVP.startSec = video.currentTime - (W - margin) / timelineVP.pxPerSec;
-    } else if (playheadPx < margin) {
-        timelineVP.startSec = Math.max(0, video.currentTime - margin / timelineVP.pxPerSec);
-    }
-
-    const newClipId = findClipAtTime(video.currentTime);
-    if (newClipId && newClipId !== playbackCurrentClipId) {
-        playbackCurrentClipId = newClipId;
-        loadClip(newClipId);
-    } else if (!newClipId) {
-        playbackCurrentClipId = null;
-    }
-
-    drawTimeline();
-}
-
-function findClipAtTime(sec) {
-    for (const c of timelineClips) {
-        if (sec >= c.start_sec && sec <= c.end_sec) return c.clip_id;
-    }
-    return null;
-}
-
-function updateTransportTime(video) {
-    const el = document.getElementById('transport-time');
-    if (el) {
-        el.textContent = fmtTs(video.currentTime) + ' / ' + fmtTs(video.duration);
-    }
-}
+function onVideoTimeUpdate() {}
 
 // ── Characters ───────────────────────────────
 
