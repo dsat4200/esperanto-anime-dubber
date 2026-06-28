@@ -658,7 +658,9 @@ async function refreshGpuStats() {
         document.getElementById('gpu-bar-fill').style.width = gpu.pct_used + '%';
         const backends = document.getElementById('gpu-backends');
         if (backends) {
-            const names = gpu.live_backends || [];
+            const names = (gpu.live_backends || []).map(
+                n => n === '__shared__' ? 'Shared (manual clones)' : n
+            );
             backends.textContent = names.length
                 ? `Live models: ${names.join(', ')}`
                 : 'No live TTS models loaded';

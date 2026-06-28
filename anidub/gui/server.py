@@ -21,6 +21,11 @@ _jobs: dict = {}
 # Live OmniVoice backends, keyed by job name. Allows /api/gpu/clear?force=1
 # and /api/cleanup to actually drop model weights from VRAM.
 _backends: dict = {}
+# Long-lived backend reused by manual single-clip clones so model weights
+# aren't reloaded (and stacked) on every click. Lazily created and registered
+# under the "__shared__" key in `_backends` so it's visible in the GPU panel.
+_shared_backend = None
+_shared_backend_lock = threading.Lock()
 
 
 def _free_vram(ipc: bool = True):
@@ -38,9 +43,60 @@ def _free_vram(ipc: bool = True):
     torch.cuda.empty_cache()
 
 
+def _flush_vram():
+    """Lightweight: sync + empty_cache only. Safe between clips when the
+    shared backend is kept hot (no GC, no ipc_collect). Drops the allocator's
+    reserved-but-unallocated pool back to the driver without touching alive
+    model weights — prevents the Windows CUDA Unified Memory fallback from
+    kicking in.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+
+def _get_or_create_shared_backend(whisper_model: str = "openai/whisper-tiny"):
+    """Return the long-lived OmniVoice backend used by manual clones.
+
+    Lazily created on first call, then reused. Thread-safe so concurrent
+    single-clip requests don't stack two backends. Registered in `_backends`
+    under `"__shared__"` so the GPU panel and Force-Unload button can see it.
+    """
+    global _shared_backend
+    with _shared_backend_lock:
+        existing = _shared_backend
+        if existing is not None and getattr(existing, "_model", None) is not None:
+            return existing
+        from anidub.tts.omnivoice import OmniVoiceTTSBackend
+        _shared_backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
+        _backends["__shared__"] = _shared_backend
+        return _shared_backend
+
+
+def _unload_shared_backend():
+    """Drop the long-lived single-clip backend and reclaim its VRAM."""
+    global _shared_backend
+    with _shared_backend_lock:
+        backend = _shared_backend
+        _shared_backend = None
+        _backends.pop("__shared__", None)
+    if backend is not None:
+        try:
+            backend.unload()
+        except Exception:
+            pass
+        del backend
+        _free_vram()
+
+
 def _unload_all_backends():
     """Tear down any registered OmniVoice backends + the Whisper cache."""
-    import torch
+    global _shared_backend
+    # Drop the long-lived shared backend (single-clip path) first.
+    if _shared_backend is not None:
+        _unload_shared_backend()
     if _backends:
         for key in list(_backends.keys()):
             backend = _backends.pop(key, None)
@@ -477,8 +533,33 @@ def api_clone(clip_id):
     character = data.get("character") or None
     mood = data.get("mood", "normal")
     proj = _anime.get_active_project()
-    _ensure_gpu_memory()
-    result = proj.clone_clip(clip_id, character=character, mood=mood)
+
+    import torch
+
+    # If VRAM is already above 75% (e.g. another process filled it, or a
+    # previous clip leaked intermediates), drop the shared backend before we
+    # (re)create one so we don't overflow into Windows shared RAM.
+    if torch.cuda.is_available():
+        total = torch.cuda.get_device_properties(0).total_memory
+        reserved = torch.cuda.memory_reserved()
+        if total > 0 and reserved / total > 0.75:
+            _unload_shared_backend()
+
+    backend = _get_or_create_shared_backend()
+    try:
+        result = proj.clone_clip(clip_id, character=character,
+                                 mood=mood, backend=backend)
+    except Exception as e:
+        # A timed-out generation leaves the CUDA stream dirty and the model
+        # potentially wedged — drop it so the next click rebuilds clean.
+        if "timed out" in str(e):
+            _unload_shared_backend()
+        raise
+    finally:
+        # Light cleanup: drop the allocator's free pool back to the driver
+        # without GC-ing the still-hot shared model.
+        _flush_vram()
+
     return jsonify({
         "inference_ms": result.get("inference_ms"),
         "output_duration": result.get("output_duration"),

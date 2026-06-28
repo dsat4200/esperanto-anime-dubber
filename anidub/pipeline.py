@@ -152,86 +152,106 @@ def clone_line(
         instruct = instruct + "\n" + instruct_extra
     target_dur = target_duration - SAFETY_MARGIN_SEC
 
-    if backend is None:
+    _owns_backend = backend is None
+    if _owns_backend:
         from anidub.tts.omnivoice import OmniVoiceTTSBackend
         backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
 
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        fut = ex.submit(
-            backend.generate,
-            text=text,
-            ref_audio=ref_audio,
-            target_duration=target_dur,
-            instruct=instruct,
-        )
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            result = fut.result(timeout=voice_timeout)
-        except concurrent.futures.TimeoutError:
+            fut = ex.submit(
+                backend.generate,
+                text=text,
+                ref_audio=ref_audio,
+                target_duration=target_dur,
+                instruct=instruct,
+            )
+            try:
+                result = fut.result(timeout=voice_timeout)
+            except concurrent.futures.TimeoutError:
+                ex.shutdown(wait=False)
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                raise RuntimeError(
+                    f"Voice generation timed out after {voice_timeout}s "
+                    f"for text: {text[:80]!r}"
+                )
+        except Exception:
             ex.shutdown(wait=False)
+            raise
+        else:
+            ex.shutdown(wait=True)
+
+        raw_wav = result["wav"]
+        sr = result["sr"]
+        out_dur = result["output_duration"]
+
+        trimmed = trim_silence(raw_wav, sr, top_db=SILENCE_TOP_DB)
+        effective_dur = len(trimmed) / sr
+
+        if abs(speed_factor - 1.0) > 0.01:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+                speed_tmp = Path(tmp_out.name)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+                speed_in = Path(tmp_in.name)
+            try:
+                sf.write(speed_in, trimmed, sr)
+                fit_audio_to_duration(speed_in, speed_tmp, effective_dur / speed_factor)
+                sped_wav, sped_sr = sf.read(speed_tmp)
+                trimmed = np.asarray(sped_wav, dtype=np.float32).T
+                sr = sped_sr
+                effective_dur = len(trimmed) / sr
+            finally:
+                Path(speed_in).unlink(missing_ok=True)
+                Path(speed_tmp).unlink(missing_ok=True)
+
+        if effective_dur > target_dur:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+                tmp_path = Path(tmp_out.name)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+                tmp_input = Path(tmp_in.name)
+            try:
+                sf.write(tmp_input, trimmed, sr)
+                fit_audio_to_duration(tmp_input, tmp_path, target_dur)
+                fitted_wav, fitted_sr = sf.read(tmp_path)
+                trimmed = np.asarray(fitted_wav, dtype=np.float32).T
+                sr = fitted_sr
+                effective_dur = len(trimmed) / sr
+            finally:
+                Path(tmp_input).unlink(missing_ok=True)
+                Path(tmp_path).unlink(missing_ok=True)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(out_path, trimmed, sr)
+
+        return {
+            "wav": trimmed,
+            "sr": sr,
+            "output_duration": out_dur,
+            "effective_duration": effective_dur,
+            "inference_ms": result["diagnostics"].get("inference_ms"),
+            "diagnostics": result["diagnostics"],
+        }
+    finally:
+        # If we created the backend locally (CLI / anidub-test-voice path),
+        # tear it down so a Python process running many clips in series does
+        # not stack model weights in VRAM between clips.
+        if _owns_backend:
+            import gc
             import torch
+            try:
+                backend.unload()
+            except Exception:
+                pass
+            del backend
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
-            raise RuntimeError(
-                f"Voice generation timed out after {voice_timeout}s "
-                f"for text: {text[:80]!r}"
-            )
-    except Exception:
-        ex.shutdown(wait=False)
-        raise
-    else:
-        ex.shutdown(wait=True)
-
-    raw_wav = result["wav"]
-    sr = result["sr"]
-    out_dur = result["output_duration"]
-
-    trimmed = trim_silence(raw_wav, sr, top_db=SILENCE_TOP_DB)
-    effective_dur = len(trimmed) / sr
-
-    if abs(speed_factor - 1.0) > 0.01:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
-            speed_tmp = Path(tmp_out.name)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
-            speed_in = Path(tmp_in.name)
-        try:
-            sf.write(speed_in, trimmed, sr)
-            fit_audio_to_duration(speed_in, speed_tmp, effective_dur / speed_factor)
-            sped_wav, sped_sr = sf.read(speed_tmp)
-            trimmed = np.asarray(sped_wav, dtype=np.float32).T
-            sr = sped_sr
-            effective_dur = len(trimmed) / sr
-        finally:
-            Path(speed_in).unlink(missing_ok=True)
-            Path(speed_tmp).unlink(missing_ok=True)
-
-    if effective_dur > target_dur:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
-            tmp_path = Path(tmp_out.name)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
-            tmp_input = Path(tmp_in.name)
-        try:
-            sf.write(tmp_input, trimmed, sr)
-            fit_audio_to_duration(tmp_input, tmp_path, target_dur)
-            fitted_wav, fitted_sr = sf.read(tmp_path)
-            trimmed = np.asarray(fitted_wav, dtype=np.float32).T
-            sr = fitted_sr
-            effective_dur = len(trimmed) / sr
-        finally:
-            Path(tmp_input).unlink(missing_ok=True)
-            Path(tmp_path).unlink(missing_ok=True)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(out_path, trimmed, sr)
-
-    return {
-        "wav": trimmed,
-        "sr": sr,
-        "output_duration": out_dur,
-        "effective_duration": effective_dur,
-        "inference_ms": result["diagnostics"].get("inference_ms"),
-        "diagnostics": result["diagnostics"],
-    }
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
 
 
 def get_op_ed_ranges(events: list) -> tuple[float, float, float, float]:
