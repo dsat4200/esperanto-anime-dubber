@@ -1,4 +1,5 @@
 import argparse
+import logging
 import mimetypes
 import os
 import re
@@ -6,10 +7,13 @@ import subprocess as sp
 import sys
 import tempfile
 import threading
+import traceback
 import webbrowser
 from pathlib import Path
 
 from flask import Flask, request, jsonify, Response, render_template
+
+_log = logging.getLogger("anidub.gui.server")
 
 from anidub.project import AnimeProject, Project, ClipStatus
 from anidub.config import get_ffmpeg_location
@@ -984,8 +988,15 @@ def api_preview_raw():
 def api_assemble():
     err = _require_project()
     if err: return err
-    final = _anime.get_active_project().assemble_full()
-    return jsonify({"final_path": str(final)})
+    _log.info("/api/assemble: starting")
+    try:
+        final = _anime.get_active_project().assemble_full()
+        _log.info("/api/assemble: OK -> %s", final)
+        return jsonify({"final_path": str(final)})
+    except Exception as e:
+        _log.error("/api/assemble: FAILED %s", type(e).__name__)
+        _log.error("%s", traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/api/stats")

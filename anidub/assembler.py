@@ -5,6 +5,10 @@ from pathlib import Path
 from anidub.config import MODEL_NAME, get_ffmpeg_location
 from anidub.extract import extract_video_clip
 
+import logging as _logging
+
+_log = _logging.getLogger("anidub.assembler")
+
 _MIX_WEIGHT_BG = 1.2
 _MIX_WEIGHT_VOICE = 0.8
 
@@ -232,12 +236,19 @@ def assemble_full(
     full_no_vocals: Path,
     full_original_audio: Path,
     voiced_results: list,
-    ass_path: Path,
+    eo_ass_path: Path,
     errors: list | None = None,
 ) -> Path:
+    _log.info("assemble_full -> build_full_episode")
+    _log.info("  mkv=%s", mkv_path)
+    _log.info("  batch_out_dir=%s", batch_out_dir)
+    _log.info("  full_no_vocals=%s", full_no_vocals)
+    _log.info("  full_original_audio=%s", full_original_audio)
+    _log.info("  eo_ass_path=%s", eo_ass_path)
+    _log.info("  voiced=%d errors=%d", len(voiced_results), len(errors or []))
     from anidub.full_episode import build_full_episode
     return build_full_episode(
         mkv_path, ass_events, batch_out_dir,
         full_no_vocals, full_original_audio,
-        voiced_results, ass_path, errors=errors,
+        voiced_results, eo_ass_path, errors=errors,
     )

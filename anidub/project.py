@@ -1,4 +1,6 @@
 import json
+import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -8,10 +10,16 @@ from anidub.config import get_ffmpeg_location
 from anidub.decompose import decompose_mkv
 from anidub.characters import (
     save_character_clip, delete_character_clip,
-    list_characters, list_character_moods,
+    list_character_moods,
     get_character_clip, get_all_character_clips,
+    list_characters,
 )
 
+
+_plog = logging.getLogger("anidub.project")
+
+_STYLE_RE = re.compile(r"^Style:\s*([^,]+),(.+)$", re.MULTILINE)
+_NON_DIALOGUE_STYLE_TOKENS = ("op", "ed", "sign", "note", "title")
 
 PROJECTS_ROOT = Path("projects")
 
@@ -783,32 +791,115 @@ class Project:
         if not sub:
             raise RuntimeError("No subtitle track selected")
         eo_ass = self.path / "lines" / "_eo.ass"
-        header = get_ass_header(sub)
+        raw_header = get_ass_header(sub)
+        header = self._ensure_eo_styles(raw_header)
         with eo_ass.open("w", encoding="utf-8") as f:
             f.write(header + "\n")
+            emitted = 0
+            skipped_no_translation = 0
             for entry in self._sorted_clips():
-                text = entry.get("translated_text") or entry["original_text"]
+                text = entry.get("translated_text")
+                if not text:
+                    skipped_no_translation += 1
+                    continue
                 style = "sign" if entry.get("status") == ClipStatus.SIGN.value else "main"
                 ts = self._sec_to_ass_ts(entry["start_sec"], entry["end_sec"])
                 f.write(f"Dialogue: 0,{ts},{style},,0000,0000,0000,,{text}\n")
+                emitted += 1
+        _plog.info("export_ass: emitted=%d skipped_no_translation=%d -> %s",
+                    emitted, skipped_no_translation, eo_ass)
         return eo_ass
+
+    @staticmethod
+    def _ensure_eo_styles(header: str) -> str:
+        styles = {name: params for name, params in _STYLE_RE.findall(header)}
+        _plog.info("_ensure_eo_styles: source header has %d styles: %s",
+                   len(styles), ", ".join(sorted(styles.keys())))
+
+        needed = {"main", "sign"}
+        style_names_lower = {n.lower() for n in styles.keys()}
+        have_main = "main" in style_names_lower
+        have_sign = "sign" in style_names_lower
+        del needed
+
+        def _pick_default_params() -> str | None:
+            for name, params in styles.items():
+                ln = name.lower()
+                if not any(tok in ln for tok in _NON_DIALOGUE_STYLE_TOKENS):
+                    return params
+            for fallback_name in ("default", "main", "default-alt", "subs", "dialogue", "subtitle"):
+                for name, params in styles.items():
+                    if name.lower() == fallback_name:
+                        return params
+            if styles:
+                return next(iter(styles.values()))
+            return None
+
+        def _pick_sign_params() -> str | None:
+            for name, params in styles.items():
+                if name.lower() == "signs" or "sign" in name.lower():
+                    return params
+            return _pick_default_params()
+
+        additions = []
+        if not have_main:
+            params = _pick_default_params()
+            if params is not None:
+                additions.append(f"Style: main,{params}")
+                _plog.info("_ensure_eo_styles: INJECTED 'main' style (params cloned from default source)")
+            else:
+                _plog.warning("_ensure_eo_styles: no source styles to clone 'main' from;subtitles using Style: main will not render")
+        else:
+            _plog.info("_ensure_eo_styles: 'main' style already present in source header")
+
+        if not have_sign:
+            params = _pick_sign_params()
+            if params is not None:
+                additions.append(f"Style: sign,{params}")
+                _plog.info("_ensure_eo_styles: INJECTED 'sign' style (params cloned from Signs source)")
+            else:
+                _plog.warning("_ensure_eo_styles: no source styles to clone 'sign' from")
+        else:
+            _plog.info("_ensure_eo_styles: 'sign' style already present in source header")
+
+        if not additions:
+            return header
+
+        events_idx = header.find("[Events]")
+        if events_idx == -1:
+            return header.rstrip() + "\n" + "\n".join(additions) + "\n"
+
+        before = header[:events_idx].rstrip()
+        after = header[events_idx:]
+        return before + "\n" + "\n".join(additions) + "\n" + after
 
     def assemble_full(self) -> Path:
         from anidub.assembler import assemble_full
+        _plog.info("assemble_full: project=%s", self.path)
         self._parse_ass()
         no_vocals_cache = self.path / "no_vocals.wav"
         if not no_vocals_cache.exists():
+            _plog.info("no_vocals missing -> running demucs")
             self.run_demucs()
+        else:
+            _plog.info("no_vocals cache OK: %s", no_vocals_cache)
+        _plog.info("exporting Esperanto ASS from current clip state")
+        eo_ass = self.export_ass()
+        _plog.info("eo_ass -> %s", eo_ass)
         audio = self._audio_path()
+        _plog.info("original audio -> %s", audio)
+        voiced = self._collect_voiced_results()
+        errors = self._collect_errors()
+        _plog.info("voiced=%d errors=%d", len(voiced), len(errors))
         return assemble_full(
             mkv_path=Path(self.state["source"]["mkv_path"]),
             ass_events=self._ass_events,
             batch_out_dir=self.path,
             full_no_vocals=no_vocals_cache,
             full_original_audio=audio,
-            voiced_results=self._collect_voiced_results(),
-            ass_path=self._sub_path(),
-            errors=self._collect_errors(),
+            voiced_results=voiced,
+            eo_ass_path=eo_ass,
+            errors=errors,
         )
 
     def needs_processing(self, clip_id: str) -> bool:
@@ -903,6 +994,7 @@ class Project:
             with eo_ass.open("r", encoding="utf-8") as f:
                 existing = f.readlines()
         hdr = self._ass_header or get_ass_header(self._sub_path())
+        hdr = self._ensure_eo_styles(hdr)
         existing = [ln for ln in existing if not ln.startswith(
             f"Dialogue: 0,{self._fmt_ass_ts(entry['start_sec'])}"
         )]
@@ -948,14 +1040,18 @@ class Project:
 
     def _collect_voiced_results(self) -> list[dict]:
         results = []
+        status_counts: dict[str, int] = {}
         for entry in self._sorted_clips():
             st = entry.get("status")
-            if st not in (ClipStatus.ACCEPTED.value, ClipStatus.NON_DUB.value) and st != ClipStatus.SIGN.value:
+            if st not in (ClipStatus.ACCEPTED.value,
+                          ClipStatus.CLONED.value,
+                          ClipStatus.NON_DUB.value) and st != ClipStatus.SIGN.value:
                 continue
             if st == ClipStatus.SIGN.value:
                 continue
             if not entry.get("clone_path") and st != ClipStatus.NON_DUB.value:
                 continue
+            status_counts[st] = status_counts.get(st, 0) + 1
             audio_start = entry["start_sec"] + entry.get("audio_offset_ms", 0.0) / 1000.0
             results.append({
                 "line_index": entry.get("display_index", 0),
@@ -972,6 +1068,8 @@ class Project:
                 "inference_ms": entry.get("clone_ms", 0),
                 "non_dub": entry.get("status") == ClipStatus.NON_DUB.value,
             })
+        _plog.info("_collect_voiced_results: returned %d clips by status: %s",
+                   len(results), ", ".join(f"{k}={v}" for k, v in sorted(status_counts.items())))
         return results
 
     def _collect_errors(self) -> list[dict]:
