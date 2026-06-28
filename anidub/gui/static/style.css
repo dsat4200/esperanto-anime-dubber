@@ -207,6 +207,22 @@ button.reset:hover { background: #777; }
 .bulk-center { flex: 1; justify-content: center; gap: 12px; }
 .bulk-right { justify-content: flex-end; }
 #bulk-bar #bulk-status { font-size: 0.85em; color: #999; }
+#bulk-status { font-size: 0.85em; color: #aaa; margin-left: 8px; }
+#bulk-actions { margin-top: 2px; }
+#bulk-actions button { font-size: 0.8em; }
+
+/* Tool buttons */
+#tool-row { gap: 4px; }
+.tool-btn {
+    width: 32px; height: 32px; padding: 0;
+    font-size: 1.2em; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; cursor: pointer;
+    background: #0f3460; color: #e0e0e0;
+    border: 1px solid #1a1a4e;
+}
+.tool-btn:hover { background: #1a1a5e; }
+.tool-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
 #play-btn {
     font-size: 1.1em; padding: 4px 14px; min-width: 56px;
     background: #0a3a5e; color: #fff;
@@ -289,3 +305,4 @@ button.reset:hover { background: #777; }
 .top-bar button { padding: 3px 10px; }
 #episode-select { min-width: 200px; margin-right: 8px; }
 #instruct-extra { height: 50px; font-size: 0.8em; resize: vertical; }
+#original-text { height: 40px; font-size: 0.85em; resize: vertical; }

@@ -531,6 +531,51 @@ class Project:
             self.state["selected_clip_id"] = order[0] if order else None
         self.save()
 
+    def create_clip(self, start_sec: float, end_sec: float, text: str = "") -> str:
+        entry = self._new_clip_entry(start_sec, end_sec, text, status="pending")
+        cid = entry["clip_id"]
+        self.state["clips"][cid] = entry
+        order = self.state.get("order", [])
+        order.append(cid)
+        self._resort_order()
+        self.state["selected_clip_id"] = cid
+        self.save()
+        return cid
+
+    def split_clip(self, clip_id: str, split_time: float) -> str:
+        entry = self._get_clip_entry(clip_id)
+        orig_start = entry["start_sec"]
+        orig_end = entry["end_sec"]
+        if not (orig_start + 0.05 < split_time < orig_end - 0.05):
+            raise ValueError(f"Split time {split_time:.2f}s must be inside clip [{orig_start:.2f}, {orig_end:.2f}]")
+        right = dict(entry)
+        right["clip_id"] = self._next_clip_id()
+        right["start_sec"] = split_time
+        right["end_sec"] = orig_end
+        entry["end_sec"] = split_time
+        self.state["clips"][right["clip_id"]] = right
+        order = self.state.get("order", [])
+        insert_pos = order.index(clip_id) + 1 if clip_id in order else len(order)
+        order.insert(insert_pos, right["clip_id"])
+        self.state["selected_clip_id"] = right["clip_id"]
+        self.save()
+        return right["clip_id"]
+
+    def restore_clip(self, entry: dict):
+        cid = entry["clip_id"]
+        self.state.setdefault("clips", {})[cid] = dict(entry)
+        order = self.state.setdefault("order", [])
+        if cid not in order:
+            order.append(cid)
+        self._resort_order()
+        self.state["selected_clip_id"] = cid
+        self.save()
+
+    def set_original_text(self, clip_id: str, text: str):
+        entry = self._get_clip_entry(clip_id)
+        entry["original_text"] = text
+        self.save()
+
     def set_audio_offset(self, clip_id: str, offset_ms: float):
         entry = self._get_clip_entry(clip_id)
         entry["audio_offset_ms"] = offset_ms

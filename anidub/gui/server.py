@@ -807,6 +807,55 @@ def api_resize(clip_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/clips/create", methods=["POST"])
+def api_create_clip():
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    proj = _anime.get_active_project()
+    cid = proj.create_clip(
+        float(data.get("start_sec", 0)),
+        float(data.get("end_sec", 0)),
+        data.get("text", ""),
+    )
+    return jsonify({"clip_id": cid})
+
+
+@app.route("/api/clips/<clip_id>/split", methods=["POST"])
+def api_split_clip(clip_id):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    proj = _anime.get_active_project()
+    try:
+        new_id = proj.split_clip(clip_id, float(data.get("split_time", 0)))
+        return jsonify({"clip_id": new_id})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/clips/restore", methods=["POST"])
+def api_restore_clip():
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    entry = data.get("entry")
+    if not entry or not entry.get("clip_id"):
+        return jsonify({"error": "Missing clip entry"}), 400
+    _anime.get_active_project().restore_clip(entry)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/clips/<clip_id>/original-text", methods=["POST"])
+def api_original_text(clip_id):
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    text = data.get("text", "")
+    _anime.get_active_project().set_original_text(clip_id, text)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/clips/<clip_id>/delete", methods=["POST"])
 def api_delete(clip_id):
     err = _require_project()

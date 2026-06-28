@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>anidub-edit</title>
+<title>Esperanto Anime Dubber</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <span class="logo">anidub-edit</span>
+  <span class="logo">Esperanto Anime Dubber</span>
   <nav>
     <button id="gpu-btn" onclick="toggleGpuPanel()" class="gpu-indicator">GPU --%</button>
     <button id="batch-btn" onclick="toggleBatchPanel()" class="batch-btn" data-i18n="batch.btn_label">Batch Jobs</button>
@@ -97,6 +97,7 @@
         <button class="accept" onclick="acceptCurrent()" data-i18n="editor.accept">Accept</button>
         <button class="reject" onclick="rejectCurrent()" data-i18n="editor.reject">Reject</button>
         <button class="reset" onclick="resetCurrent()" data-i18n="editor.reset">Reset</button>
+        <span id="bulk-status"></span>
       </div>
     </div>
     <div id="editor-right">
@@ -109,7 +110,7 @@
 
       <div class="field">
         <label data-i18n="editor.original_label">Original:</label>
-        <div id="original-text" class="readonly"></div>
+        <textarea id="original-text" rows="2" oninput="onOriginalTextInput()"></textarea>
       </div>
 
       <div class="field">
@@ -140,6 +141,13 @@
         <label data-i18n="editor.instruct_label">Additional clone instructions:</label>
         <textarea id="instruct-extra" rows="2"></textarea>
       </div>
+
+      <div class="btn-row" id="bulk-actions">
+        <button onclick="translateAll()" data-i18n="bulk.translate_all">Translate All</button>
+        <button onclick="cloneAll()" data-i18n="bulk.clone_all">Clone All</button>
+        <button onclick="generatePlaybackPreviews()" data-i18n="bulk.generate_previews">Generate Previews</button>
+        <button onclick="deletePlaybackPreviews()" data-i18n="bulk.delete_previews">Delete Previews</button>
+      </div>
     </div>
   </div>
 
@@ -158,12 +166,11 @@
 
 <!-- Bulk bar / transport -->
 <div id="bulk-bar">
-  <div class="bulk-left">
-    <button onclick="translateAll()" data-i18n="bulk.translate_all">Translate All</button>
-    <button onclick="cloneAll()" data-i18n="bulk.clone_all">Clone All</button>
-    <button onclick="generatePlaybackPreviews()" data-i18n="bulk.generate_previews">Generate Previews</button>
-    <button onclick="deletePlaybackPreviews()" data-i18n="bulk.delete_previews">Delete Previews</button>
-    <span id="bulk-status"></span>
+  <div class="bulk-left" id="tool-row">
+    <button id="tool-add-sub" class="tool-btn" onclick="toggleTool('add-sub')" title="Add Subtitle Track">＋</button>
+    <button id="tool-knife" class="tool-btn" onclick="toggleTool('knife')" title="Split Subtitle Track">╎</button>
+    <button id="tool-erase" class="tool-btn" onclick="toggleTool('erase')" title="Delete Subtitle Track">🗑</button>
+    <button id="tool-undo" class="tool-btn" onclick="undo()" title="Undo">↩</button>
   </div>
   <div class="bulk-center">
     <button id="play-btn" onclick="togglePlayback()" title="Play/Pause">&#9654;</button>

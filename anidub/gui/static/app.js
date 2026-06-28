@@ -15,6 +15,9 @@ let timelineCtx = null;
 let timelineVP = { startSec: 0, pxPerSec: 50 };
 let timelineDrag = null;
 let timelineCtxMenuClipId = null;
+let activeTool = null;
+let toolCursorSec = -1;
+let toolDragStart = null;
 
 // ── i18n ─────────────────────────────────────
 let i18n = {};
@@ -382,7 +385,7 @@ function renderClip() {
             .replace('{id}', c.clip_id)
             .replace('{start}', fmtTs(c.start_sec))
             .replace('{end}', fmtTs(c.end_sec));
-    document.getElementById('original-text').textContent = c.original_text;
+    document.getElementById('original-text').value = c.original_text;
     document.getElementById('translation-text').value = c.translated_text || '';
     document.getElementById('pronunciation-text').value = c.pronunciation_override || '';
     document.getElementById('instruct-extra').value = c.instruct_extra || '';
@@ -1248,6 +1251,35 @@ function drawTimeline() {
             ctx.beginPath(); ctx.arc(x, RULER_H, 4, 0, Math.PI * 2); ctx.fill();
         }
     }
+
+    // Tool visuals
+    if (activeTool === 'knife' && toolCursorSec >= 0) {
+        const kx = secToPx(toolCursorSec);
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(kx, CLIP_TOP); ctx.lineTo(kx, H); ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    if (activeTool === 'erase' && toolCursorSec >= 0) {
+        const kx = secToPx(toolCursorSec);
+        ctx.strokeStyle = 'rgba(200, 40, 40, 0.7)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 2]);
+        ctx.beginPath(); ctx.moveTo(kx, CLIP_TOP); ctx.lineTo(kx, H); ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    if (activeTool === 'add-sub' && timelineDrag && timelineDrag.type === 'add-sub') {
+        const startX = toolDragStart ? secToPx(toolDragStart.startSec) : 0;
+        const endX = secToPx(pxToSec(timelineDrag.startX));
+        const x1 = Math.min(startX, endX);
+        const w = Math.max(Math.abs(startX - endX), 4);
+        ctx.fillStyle = 'rgba(233, 69, 96, 0.2)';
+        ctx.strokeStyle = 'rgba(233, 69, 96, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.fillRect(x1, CLIP_TOP, w, H - CLIP_TOP - 2);
+        ctx.strokeRect(x1, CLIP_TOP, w, H - CLIP_TOP - 2);
+    }
 }
 
 function brighten(hex, amount) {
@@ -1294,6 +1326,42 @@ function hitTestTimeline(mx, my) {
 function onTimelineMouseDown(e) {
     const rect = e.target.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+    if (activeTool === 'knife') {
+        const hit = hitTestTimeline(mx, my);
+        if (hit.type === 'clip' && hit.clipId) {
+            const cid = hit.clipId;
+            const oldEnd = timelineClips.find(c => c.clip_id === cid)?.end_sec;
+            const splitSec = pxToSec(mx);
+            api(`/api/clips/${cid}/split`, { method: 'POST', body: { split_time: splitSec } })
+                .then(resp => {
+                    if (resp && resp.clip_id && oldEnd !== undefined) {
+                        pushUndo('split', { clipId: cid, newClipId: resp.clip_id, oldEnd });
+                    }
+                    return loadTimeline();
+                });
+        }
+        return;
+    }
+
+    if (activeTool === 'erase') {
+        const hit = hitTestTimeline(mx, my);
+        if (hit.type === 'clip' && hit.clipId) {
+            const clip = timelineClips.find(c => c.clip_id === hit.clipId);
+            if (clip) pushUndo('erase', { entry: deepClone(clip) });
+            api(`/api/clips/${hit.clipId}/delete`, { method: 'POST' })
+                .then(() => loadTimeline());
+        }
+        return;
+    }
+
+    if (activeTool === 'add-sub') {
+        toolDragStart = { x: mx, y: my, startSec: pxToSec(mx) };
+        timelineDrag = { type: 'add-sub', startX: mx };
+        drawTimeline();
+        return;
+    }
+
     if (playback.mode === 'on' && my < CLIP_TOP - 2) {
         timelineDrag = { type: 'seek', startX: mx };
         seekPlaybackTo(pxToSec(mx));
@@ -1314,6 +1382,27 @@ function onTimelineMouseDown(e) {
 function onTimelineMouseMove(e) {
     const rect = e.target.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+    if (activeTool === 'knife') {
+        const hit = hitTestTimeline(mx, my);
+        toolCursorSec = (hit.type === 'clip' && hit.clipId) ? pxToSec(mx) : -1;
+        drawTimeline();
+        return;
+    }
+
+    if (activeTool === 'erase') {
+        const hit = hitTestTimeline(mx, my);
+        toolCursorSec = (hit.type === 'clip' && hit.clipId) ? pxToSec(mx) : -1;
+        drawTimeline();
+        return;
+    }
+
+    if (activeTool === 'add-sub' && toolDragStart) {
+        timelineDrag = { type: 'add-sub', startX: mx };
+        drawTimeline();
+        return;
+    }
+
     if (!timelineDrag) {
         const hit = hitTestTimeline(mx, my);
         if (playback.mode === 'on' && my < CLIP_TOP - 2) e.target.style.cursor = 'pointer';
@@ -1347,6 +1436,23 @@ function onTimelineMouseMove(e) {
 }
 
 async function onTimelineMouseUp(e) {
+    if (timelineDrag && timelineDrag.type === 'add-sub' && toolDragStart) {
+        const rect = e.target.getBoundingClientRect();
+        const endSec = pxToSec(e.clientX - rect.left);
+        const startSec = toolDragStart.startSec;
+        const s = Math.min(startSec, endSec);
+        const e2 = Math.max(startSec, endSec);
+        toolDragStart = null;
+        timelineDrag = null;
+        if (e2 - s > 0.1) {
+            const resp = await api('/api/clips/create', { method: 'POST', body: { start_sec: s, end_sec: e2 } });
+            if (resp && resp.clip_id) pushUndo('create', { clipId: resp.clip_id });
+            await loadTimeline();
+        }
+        drawTimeline();
+        return;
+    }
+
     if (timelineDrag && timelineDrag.type !== 'pan') e.target.style.cursor = 'grab';
     if (!timelineDrag) return;
     const drag = timelineDrag; timelineDrag = null;
@@ -1355,6 +1461,9 @@ async function onTimelineMouseUp(e) {
     const clip = timelineClips.find(c => c.clip_id === drag.clipId);
     if (!clip) return;
     if (drag.type === 'handle-start' || drag.type === 'handle-end') {
+        if (drag.origStart !== null && drag.origEnd !== null) {
+            pushUndo('resize', { clipId: drag.clipId, oldStart: drag.origStart, oldEnd: drag.origEnd });
+        }
         await api(`/api/clips/${drag.clipId}/resize`, { method: 'POST', body: { start_sec: clip.start_sec, end_sec: clip.end_sec } });
     } else if (drag.type === 'audio-handle') {
         await api(`/api/clips/${drag.clipId}/audio-offset`, { method: 'POST', body: { offset_ms: clip.audio_offset_ms } });
@@ -1372,6 +1481,94 @@ function onTimelineWheel(e) {
     timelineVP.pxPerSec = Math.max(2, Math.min(2000, timelineVP.pxPerSec * factor));
     timelineVP.startSec = Math.max(0, secAtCursor - mx / timelineVP.pxPerSec);
     drawTimeline();
+}
+
+// ── Tools ─────────────────────────────────────
+
+function toggleTool(name) {
+    if (activeTool === name) {
+        activeTool = null;
+        document.getElementById('tool-' + name)?.classList.remove('active');
+        updateToolCursor();
+    } else {
+        if (activeTool) document.getElementById('tool-' + activeTool)?.classList.remove('active');
+        activeTool = name;
+        document.getElementById('tool-' + name)?.classList.add('active');
+        toolCursorSec = -1;
+        toolDragStart = null;
+        updateToolCursor();
+    }
+    drawTimeline();
+}
+
+function updateToolCursor() {
+    const c = document.getElementById('timeline-canvas');
+    if (activeTool === 'add-sub') c.style.cursor = 'crosshair';
+    else if (activeTool === 'knife') c.style.cursor = 'text';
+    else if (activeTool === 'erase') c.style.cursor = 'pointer';
+    else c.style.cursor = 'grab';
+}
+
+// ── Undo ──────────────────────────────────────
+
+const MAX_UNDO = 10;
+let undoStack = [];
+
+function deepClone(obj) {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function pushUndo(type, data) {
+    undoStack.push({ type, data });
+    while (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+async function undo() {
+    if (!undoStack.length) return;
+    const action = undoStack.pop();
+    if (action.type === 'create') {
+        await api(`/api/clips/${action.data.clipId}/delete`, { method: 'POST' });
+        await loadTimeline();
+        showUndoFlash('Undo: add clip');
+    } else if (action.type === 'erase') {
+        if (action.data.entry) {
+            await api('/api/clips/restore', { method: 'POST', body: { entry: action.data.entry } });
+            await loadTimeline();
+            showUndoFlash('Undo: delete clip');
+        }
+    } else if (action.type === 'split') {
+        const { clipId, newClipId, oldEnd } = action.data;
+        await api(`/api/clips/${newClipId}/delete`, { method: 'POST' });
+        await api(`/api/clips/${clipId}/resize`, { method: 'POST', body: { start_sec: undefined, end_sec: oldEnd } });
+        await loadTimeline();
+        showUndoFlash('Undo: split clip');
+    } else if (action.type === 'resize') {
+        const { clipId, oldStart, oldEnd } = action.data;
+        await api(`/api/clips/${clipId}/resize`, { method: 'POST', body: { start_sec: oldStart, end_sec: oldEnd } });
+        await loadTimeline();
+        showUndoFlash('Undo: resize');
+    }
+}
+
+function showUndoFlash(msg) {
+    const el = document.getElementById('bulk-status');
+    if (el) {
+        el.textContent = msg;
+        setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 2000);
+    }
+}
+
+// ── Editable original text ────────────────────
+
+let _originalTextTimer = null;
+function onOriginalTextInput() {
+    if (_originalTextTimer) clearTimeout(_originalTextTimer);
+    _originalTextTimer = setTimeout(() => {
+        if (!currentClip) return;
+        const text = document.getElementById('original-text').value;
+        api(`/api/clips/${currentClip.clip_id}/original-text`, { method: 'POST', body: { text } });
+        currentClip.original_text = text;
+    }, 500);
 }
 
 function onTimelineCtxMenu(e) {
