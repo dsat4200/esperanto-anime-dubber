@@ -1,6 +1,6 @@
 # anidub
 
-Anime dubbing pipeline: separate audio into background + vocals, translate Japanese subtitles to Esperanto, then generate Esperanto voice tracks using the OmniVoice (k2-fsa) TTS model.
+Anime dubbing pipeline: separate audio into background + vocals, translate Japanese subtitles to Esperanto, then generate Esperanto voice tracks using the OmniVoice (k2-fsa) TTS model. All dubbing work happens in a browser-based editor — no CLI workflow commands required.
 
 ## Disclaimer
 
@@ -86,7 +86,7 @@ anime/
 ### MKV requirements
 
 - Must contain **an ASS subtitle track** (embedded). If not embedded, provide a `.ass` file next to the MKV.
-- Must contain **a Japanese audio track** (or whichever language you're dubbing from). Use `--audio-lang jpn` to pick it.
+- Must contain **a Japanese audio track** (or whichever language you're dubbing from).
 - Filenames can follow any convention. Episodes are processed in **alphabetical order**.
 
 ### ASS subtitle requirements
@@ -99,7 +99,192 @@ anime/
 
 ### Esperanto ASS files
 
-If an `_eo.ass` file already exists for an episode (e.g., `Gabriel.DropOut.S00E02_eo.ass`), it is used directly. Otherwise, the tool auto-extracts the embedded Japanese ASS track, translates it to Esperanto via Google Translate, and saves it as `{mkv_stem}_eo.ass` in the anime folder.
+If an `_eo.ass` file already exists for an episode (e.g., `Gabriel.DropOut.S00E02_eo.ass`), it is used directly. Otherwise, the editor auto-extracts the embedded Japanese ASS track, translates it to Esperanto via Google Translate, and saves it as `{mkv_stem}_eo.ass` in the anime folder.
+
+---
+
+## Starting the Editor
+
+```powershell
+anidub-edit
+```
+
+Opens `http://127.0.0.1:5000` in your browser. Optional flags: `--port N`, `--host ADDR`, `--project PATH` (open an existing project on startup).
+
+<!-- SCREENCAP: anidub-edit window just opened, empty home screen -->
+
+---
+
+## 1. Creating a Project
+
+Enter the anime folder name (e.g. `gabriel_dropout`) in the text box on the home panel and click **Create Project**. The editor discovers all MKVs in that folder, extracts their audio/subtitle track listings, and shows each episode as a card on the home screen.
+
+To re-open an existing project, pick it from the dropdown at the top of the home panel and click **Load**.
+
+<!-- SCREENCAP: home screen with episode cards populated, showing Tr/Cl/Ac progress bars -->
+
+---
+
+## 2. Opening an Episode
+
+Double-click an episode card to open the editor.
+
+- **Left pane** — video preview, plus the audio shift, dialogue speed, and per-clip buttons (Clone, Preview, Accept, Reject, Reset).
+- **Right pane** — current clip header, original text, translation text box, pronunciation override, character + mood selectors, additional clone instructions.
+- **Bottom** — timeline bar showing every clip in the episode, color-coded by status.
+
+<!-- SCREENCAP: editor view with a clip loaded, left + right panes visible -->
+
+---
+
+## 3. Audio + Subtitle Tracks
+
+When you trigger a **Batch Translate** or **Batch Clone** on multiple episodes, the editor opens a track-picker modal:
+
+- Pick the **Japanese audio track** (usually the one labeled `jpn`).
+- Pick the **ASS subtitle track**.
+- These choices apply to all selected episodes; episodes with different track counts are skipped and reported.
+
+For a single-episode open, the editor auto-selects the first audio + subtitle tracks. Episode cards must already be set up via the modal before running batch operations.
+
+<!-- SCREENCAP: track-picker modal showing audio and subtitle radio choices -->
+
+---
+
+## 4. Demucs Separation
+
+The first time you open an episode, the editor automatically runs Demucs (`htdemucs`) to split the ripped audio into:
+
+- `vocals.wav` (original Japanese voices)
+- `no_vocals.wav` (background music + SFX)
+
+This runs once per episode and may take a few minutes. A status overlay shows progress.
+
+<!-- SCREENCAP: "Running Demucs (may take a few minutes)..." overlay -->
+
+---
+
+## 5. Translating
+
+Three ways to translate subtitle lines to Esperanto:
+
+- **Translate All** (bulk bar at the bottom) — translates every pending clip in the current episode via Google Translate (auto-detect → Esperanto).
+- **Batch Translate** (home screen, after Shift-clicking multiple episode cards) — translates all selected episodes at once, prompting for audio/subtitle tracks.
+- **Per-clip** — type a manual translation in the **Translation** text area on the right pane, then click **Save settings**. Or click **Restore original translation** to re-run Google Translate on this clip.
+
+Translated lines are visible immediately in the right pane. The clip's status changes from `pending` to `translated`.
+
+<!-- SCREENCAP: clip with original text + translation box filled, status showing "translated" -->
+
+---
+
+## 6. Voice Cloning
+
+Three ways to generate Esperanto voice:
+
+- **Clone All** (bulk bar) — clones every translated clip in the current episode.
+- **Batch Clone** (home screen) — clones all selected episodes at once.
+- **Per-clip Clone** (left pane) — clones the currently-loaded clip only.
+
+OmniVoice (k2-fsa) generates Esperanto speech cloned from a ~3-second reference clip of the original Japanese actor. The TTS model stays in VRAM between manual clones for fast iteration; if VRAM usage exceeds 75% before a clone, the shared model is automatically unloaded and recreated. Live tensors, reserved memory, and active TTS backends are visible in the GPU panel (see [GPU Memory Panel](#gpu-memory-panel)).
+
+<!-- SCREENCAP: editor after a successful clone, clone-info string showing inference time and status -->
+
+---
+
+## 7. Reviewing
+
+- **Preview** button — plays the video with the cloned Esperanto voice mixed over the original background audio.
+- **Audio shift slider** (-500ms to +500ms) — fine-tunes the cloned voice's timing offset. Updates the timeline's red audio-offset handle in real time.
+- **Dialogue speed slider** (0.50× to 2.00×) — applied via ffmpeg `atempo` during mixing.
+- **Accept / Reject / Reset** — `Accept` marks the clip done and advances to the next unaccepted clip; `Reject` flags it for re-cloning; `Reset` clears translation + clone.
+- **Timeline bar** (bottom) — every clip shown as a colored block by status:
+  - `pending` (dark), `translating` (purple), `translated` (blue),
+  - `cloned` (gold), `accepted` (green), `rejected` (red),
+  - `non_dub` (grey), `sign` (teal, hatched).
+  - Drag block edges to resize a clip's timing window.
+  - Drag the red handle at the bottom of a clip to nudge its audio offset.
+  - Right-click a clip for **Delete clip** or **Toggle sign/audio**.
+
+<!-- SCREENCAP: timeline bar showing mixed-status clips, with the current clip highlighted -->
+
+---
+
+## 8. Characters & Moods
+
+To reuse a voice print across episodes:
+
+1. Load a clip whose voice you want to preserve.
+2. Pick a **Character** name from the dropdown (or type a new one).
+3. Pick a **Mood** (defaults to `normal`).
+4. Click **Save as character clip** — this copies the current clip's `ref.wav` into a character voice library.
+
+The **Manage** button opens the character panel, which lists every character×mood pair and lets you delete individual entries. Before cloning, set the Character + Mood dropdowns — OmniVoice will use that voice print for the generated clip.
+
+<!-- SCREENCAP: character Manage panel showing multiple characters with moods -->
+
+---
+
+## 9. Signs / Non-Dubbed Clips
+
+Some subtitle lines aren't dialogue (on-screen signs, titles) and shouldn't be voiced.
+
+- Click **Mark as Sign** on the left pane to toggle the current clip's status to `sign`. The button label flips to **Mark as Vocal** when status is `sign`.
+- Right-click a timeline clip → **Toggle sign/audio** to do the same from the timeline.
+- `sign` clips keep original audio and subtitles, and are skipped during cloning and assembly. They render with a hatched pattern on the timeline.
+
+The editor auto-detects some non-dub clips (no usable reference audio, text too short, etc.) and marks them `non_dub`; these cannot be toggled back to `sign`.
+
+---
+
+## 10. Assembling
+
+Click **Assemble** in the top bar to build the full dubbed episode from all accepted clips:
+
+- Voiced lines replace the original Japanese vocals.
+- OP/ED sections keep original audio.
+- Gaps > 2 seconds between lines are filled with original audio.
+- Error / skipped lines are filled with original audio.
+- Video stream is copied (no re-encode).
+- Audio track 1: AAC 256k (Esperanto dub); Audio track 2: original Japanese (copy).
+- Subtitle track: copy.
+
+Output: `projects/{anime}/{episode}/out/{episode}_Dubbed.mkv`. A completion dialog shows the final path.
+
+To skip an episode in future batch runs, mark it **Complete** (per-episode flag).
+
+<!-- SCREENCAP: completion dialog showing the final assembled .mkv path -->
+
+---
+
+## GPU Memory Panel
+
+Click the **GPU --%** indicator in the top-right of the header to open the GPU panel:
+
+- **Live tensors** — VRAM allocated by active tensors.
+- **Reserved (driver)** — VRAM held by the caching allocator.
+- **% reserved** — fraction of total VRAM reserved.
+- **Live models** — names of active TTS backends (including `Shared (manual clones)` for the long-lived single-clip backend).
+
+Buttons:
+
+- **Clear GPU Memory** — frees the allocator's reserved-but-unallocated pool (lightweight).
+- **Force Unload Models** — drops every loaded OmniVoice + Whisper backend from VRAM (heavier; reshapes the live-models list to "No live TTS models loaded").
+
+<!-- SCREENCAP: GPU panel open showing device, live tensors, reserved bar, and live backends -->
+
+---
+
+## Language Selector
+
+Next to the **Home** button, a **Language** dropdown lets you switch the editor UI between:
+
+- **English** (default)
+- **Esperanto**
+
+The choice is saved in `localStorage`, so it persists across browser sessions. Switching re-renders the current clip, episode home, timeline, and GPU panel in the chosen language. Status enum words (`pending`, `translated`, `cloned`, `accepted`, `rejected`, `sign`, `non_dub`) are also localized; the timeline color coding is unchanged.
+
+<!-- SCREENCAP: header showing the language dropdown with Esperanto selected and UI text in Esperanto -->
 
 ---
 
@@ -153,182 +338,6 @@ After all lines are voiced, `build_full_episode()` assembles the complete episod
 
 ---
 
-## Commands
-
-Three CLI tools are installed:
-
-| Command | Purpose |
-|---------|---------|
-| `anidub-test-voice` | **Main tool** — single line tests and batch dubbing |
-| `anidub-translate` | Extract + translate subtitles only (no voicing) |
-| `anidub` | Banner only (future full pipeline entry point) |
-
-### Single line test
-
-```powershell
-# Interactive: pick anime → episode → line
-anidub-test-voice --anime gabriel_dropout
-
-# Skip the line picker
-anidub-test-voice --anime gabriel_dropout --line 42
-
-# Direct path to a specific MKV
-anidub-test-voice --mkv "anime/oreimo/Oreimo - 01.mkv" --line 10
-```
-
-Output goes to `test_output/{anime}/{episode}/{date}/`:
-
-```
-test_output/
-├── gabriel_dropout/
-│   └── Gabriel.DropOut.S00E02/
-│       └── 2026-06-24/
-│           ├── line_006/
-│           │   ├── ref.wav            # Extracted reference audio
-│           │   ├── tts_raw.wav        # Raw TTS output
-│           │   ├── tts.wav            # Trimmed + tempo-fitted output
-│           │   ├── no_vocals_clip.wav # Background audio for this line
-│           │   ├── dubbed.wav         # Voice + background mixed
-│           │   ├── video_only.mkv     # Video segment for this line
-│           │   ├── sub_line.ass       # Single-line subtitle
-│           │   ├── final.mkv          # Final muxed clip
-│           │   └── log.json           # Full diagnostics
-│           └── ...
-```
-
-### Batch one episode
-
-```powershell
-# Shows episode picker if multiple MKVs, then voices every line
-anidub-test-voice --batch --anime gabriel_dropout
-```
-
-### Batch all episodes in a folder
-
-```powershell
-# Process every MKV in the folder sequentially
-anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn
-
-# Process a range (1-based, alphabetical order)
-anidub-test-voice --batch --anime hxh --range 1-10
-anidub-test-voice --batch --anime hxh --range 50-
-
-# Resume after interruption (completed episodes are auto-skipped)
-anidub-test-voice --batch --anime hxh --range 15- -y --auto --audio-lang jpn
-```
-
-Output goes to `batch_output/{anime}/{episode}/{date}/`:
-
-```
-batch_output/
-├── gabriel_dropout/
-│   ├── Gabriel.DropOut.S00E02/
-│   │   └── 2026-06-24/
-│   │       ├── clips/
-│   │       │   ├── line_006_0-21-43.77_0-21-46.82_Mi_eliris_bone/
-│   │       │   │   ├── ref.wav
-│   │       │   │   ├── tts_raw.wav
-│   │       │   │   ├── tts.wav
-│   │       │   │   ├── no_vocals_clip.wav
-│   │       │   │   ├── dubbed.wav
-│   │       │   │   ├── video_only.mkv
-│   │       │   │   ├── sub_line.ass
-│   │       │   │   └── final.mkv
-│   │       │   └── ...
-│   │       ├── ripped_audio.wav
-│   │       ├── full_no_vocals.wav
-│   │       ├── full_vocals.wav
-│   │       ├── full_dubbed.wav
-│   │       ├── Gabriel.DropOut.S00E02_Dubbed.mkv   ← Final episode!
-│   │       ├── skipped.json
-│   │       └── batch_log.json
-│   ├── Gabriel.DropOut.S01E03/
-│   │   └── 2026-06-24/
-│   │       └── ...
-│   └── ...
-```
-
-### Translate only (no voicing)
-
-```powershell
-# Translate one episode (interactive)
-anidub-test-voice --translate --anime gabriel_dropout
-
-# Translate a range of episodes (batch translate only, no voice)
-anidub-test-voice --translate --batch --anime hxh --range 1-10 -y --auto
-```
-
-Extracts embedded ASS from MKV, translates to Esperanto, writes `_eo.ass`. Does **not** voice.
-
-### Unattended overnight run
-
-```powershell
-anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn
-```
-
-| Flag | Purpose |
-|------|---------|
-| `-y` | Skip "Voice N lines?" confirmation |
-| `--auto` | Auto-merge duplicate lines during translation (no prompts) |
-| `--audio-lang jpn` | Skip audio track picker |
-
----
-
-## All Options
-
-```
---mkv PATH            Direct path to a single MKV
---ass PATH            Direct path to a single ASS file
---anime NAME          Anime folder name under anime/ (with --batch: all episodes)
-
---batch               Voice all usable lines in the episode
---translate           Extract + translate embedded ASS (stops unless --batch)
---auto                Skip merge prompts during translation
---yes, -y             Skip "Voice N lines?" confirmation
-
---range 1-10          Episode index range (1-based, alphabetical order)
---range 50-           From episode 50 to end
---line N              Skip line picker, use specific subtitle index
-
---audio-lang jpn      Audio track language (e.g., jpn, eng)
---whisper-model       openai/whisper-tiny (default)
-                      also: -base, -small, -medium, -large-v3-turbo
---voice-timeout N     Abort stuck line after N seconds (default: 120)
-```
-
-### Keyboard shortcuts (during batch voicing)
-
-| Key | Action |
-|-----|--------|
-| `s` | Skip the current line (no Enter needed) |
-
----
-
-## Source File Structure
-
-```
-anidub/
-├── __init__.py          # Package init, version string
-├── __main__.py          # Entry point → cli.main()
-├── cli.py               # Banner
-├── config.py            # Paths, ffmpeg discovery, output dir helpers
-├── ass.py               # .ass parser, dialogue filter, language detection, text cleaning
-├── translate.py         # Embedded ASS extraction, Google Translate (JPN → EO)
-├── esperanto.py         # Esperanto phonetics table for TTS instruct prompt
-├── extract.py           # ffmpeg audio extraction, silence trimming, tempo fitting
-├── separator.py         # Demucs audio separation (vocals + no_vocals)
-├── asr.py               # Whisper-based reference audio transcription
-├── pipeline.py          # Core: process a single subtitle line end-to-end
-├── assembler.py         # Assemble individual line: video clip + mix audio + mux
-├── full_episode.py      # Build full dubbed episode from all voiced lines
-├── test_voice.py        # Main CLI: single-line test + batch modes
-└── tts/
-    ├── __init__.py       # TTSBackend Protocol / TTSResult TypedDict
-    └── omnivoice.py      # OmniVoiceTTSBackend (k2-fsa model wrapper)
-```
-
----
-
 ## Known Issues
 
 ### Google Translate 500 errors
@@ -351,9 +360,8 @@ Expect a few minutes of downloading before the first line is voiced.
 
 | Problem | Fix |
 |---------|-----|
-| `anidub-test-voice not recognized` | Run `pip install -e .` in the activated venv |
 | `ffmpeg not found` | Run `.\install.ps1` or ensure `ffmpeg\bin\ffmpeg.exe` exists |
 | `CUDA out of memory` | Close other GPU applications; `torch.cuda.empty_cache()` is called between lines |
 | All lines skipped | Check ASS styles — dialogue must be `Style: main`; verify text is Esperanto (not Japanese) |
 | Original Japanese voices not removed | Demucs cache is at `{output_dir}/full_no_vocals.wav` — delete it to force re-separation |
-| Episode uses wrong subtitles | Delete the stale `_eo.ass` file and re-run; the tool will re-extract + re-translate |
+| Episode uses wrong subtitles | Delete the stale `_eo.ass` file and re-open the episode; the editor will re-extract + re-translate |

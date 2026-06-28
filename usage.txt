@@ -96,3 +96,31 @@ GPU MEMORY
 
   If VRAM exceeds 75% before a clone, the shared model is
   automatically unloaded and recreated to keep within limits.
+
+
+CLI COMMANDS (for scripting / headless use)
+
+  anidub-test-voice --anime NAME          Single line test (interactive)
+  anidub-test-voice --batch --anime NAME  Batch one episode (no GUI)
+  anidub-test-voice --batch --anime NAME --range 1-10 -y --auto
+                                          Batch episodes 1-10 unattended
+  anidub-translate --anime NAME           Translate subtitles only
+
+  See anidub-test-voice --help for all options (--mkv, --line,
+  --whisper-model, --voice-timeout, etc.).
+
+
+FILE STRUCTURE
+
+  anime/                    Input MKVs (organized by anime name)
+  projects/                 Per-episode project state, audio extraction,
+                            and clone outputs
+  downloads/                Downloaded models (OmniVoice, Whisper,
+                            Demucs)
+
+
+OPTIONS SUMMARY
+
+  --port N              Server port (default 5000)
+  --host ADDR           Bind address (default 127.0.0.1)
+  --project PATH        Open existing anime project on startup

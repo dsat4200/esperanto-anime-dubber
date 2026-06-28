@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Generate i18n/eo.json and usage_eo.txt from their English sources.
+"""Generate i18n/eo.json, usage_eo.txt and README_eo.md from English sources.
 
 Reuses the Google-Translate path from anidub.translate so we don't add
 new dependencies: just deep-translator with a 500-backoff retry.
 
 Usage::
 
-    python tools/translate_ui.py               # both
-    python tools/translate_ui.py --ui-only      # just en.json -> eo.json
-    python tools/translate_ui.py --usage-only   # just usage.txt -> usage_eo.txt
+    python tools/translate_ui.py               # UI + usage + README
+    python tools/translate_ui.py --ui-only      # en.json -> eo.json
+    python tools/translate_ui.py --usage-only   # usage.txt -> usage_eo.txt
+    python tools/translate_ui.py --readme-only  # README.md -> README_eo.md
 """
 from __future__ import annotations
 
@@ -32,6 +33,8 @@ EN_JSON = ROOT / "anidub" / "gui" / "static" / "i18n" / "en.json"
 EO_JSON = ROOT / "anidub" / "gui" / "static" / "i18n" / "eo.json"
 USAGE_EN = ROOT / "usage.txt"
 USAGE_EO = ROOT / "usage_eo.txt"
+README_EN = ROOT / "README.md"
+README_EO = ROOT / "README_eo.md"
 
 # UI strings that are purely symbolic / literal placeholders; copied verbatim.
 UI_SKIP = {
@@ -157,16 +160,89 @@ def translate_usage(translator) -> int:
     return 0
 
 
+# Markdown fence detection: a line whose stripped content is one of
+# ``` / ```python / ```powershell etc.  We treat ``` fence boundaries
+# specially below rather than dropping them via _line_should_skip.
+_FENCE_RE = re.compile(r"^\s*```")
+_HTML_COMMENT_OPEN_RE = re.compile(r"^\s*<!--")
+_MD_TABLE_RE = re.compile(r"^\s*\|")
+_MD_IMAGE_RE = re.compile(r"^\s*!\[")
+
+
+def translate_readme(translator) -> int:
+    """Translate README.md prose to README_eo.md.
+
+    Skips (preserves verbatim):
+        * fenced code blocks (inclusive backtick lines)
+        * pipe-table rows (lines beginning with ``|``)
+        * HTML comments (lines beginning with ``<!--``) — keeps
+          ``<!-- SCREENCAP: ... -->`` markers identical in both files
+        * standalone image lines (``![alt](path)``)
+        * shell commands (lines beginning with ``>``), path-shaped
+          lines, and ASCII-only box-art / divider lines (reuses
+          _line_should_skip)
+    """
+    print(f"Loading {README_EN}")
+    lines = README_EN.read_text(encoding="utf-8").splitlines(keepends=True)
+    out_lines: list[str] = []
+    in_fence = False
+    for i, line in enumerate(lines, 1):
+        stripped = line.rstrip("\r\n")
+
+        # Fence state machine: toggles on ``` lines; keeps fence lines
+        # and any content inside the block in source language.
+        if _FENCE_RE.match(stripped):
+            in_fence = not in_fence
+            out_lines.append(line)
+            print(f"  [{i:>3d}] (fence) {stripped[:60]!r}")
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+
+        # Skip-on-preserve rules specific to markdown:
+        if _HTML_COMMENT_OPEN_RE.match(line) or _MD_TABLE_RE.match(line) or _MD_IMAGE_RE.match(line):
+            out_lines.append(line)
+            print(f"  [{i:>3d}] (skip) {stripped[:60]!r}")
+            continue
+
+        if _line_should_skip(line):
+            out_lines.append(line)
+            if line.strip():
+                print(f"  [{i:>3d}] (skip) {stripped[:60]!r}")
+            continue
+
+        src = stripped
+        dst = _safe_translate(translator, src)
+        if line.endswith("\r\n"):
+            out_lines.append(dst + "\r\n")
+        elif line.endswith("\n"):
+            out_lines.append(dst + "\n")
+        else:
+            out_lines.append(dst)
+        print(f"  [{i:>3d}] {src[:60]!r} -> {dst[:60]!r}")
+    README_EO.write_text("".join(out_lines), encoding="utf-8")
+    print(f"Wrote {README_EO}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ui-only", action="store_true")
     ap.add_argument("--usage-only", action="store_true")
+    ap.add_argument("--readme-only", action="store_true")
     args = ap.parse_args()
 
-    do_ui = not args.usage_only
-    do_usage = not args.ui_only
-    if args.ui_only: do_usage = False
-    if args.usage_only: do_ui = False
+    # If any specific flag is set, run only those; otherwise run all.
+    any_specific = args.ui_only or args.usage_only or args.readme_only
+    if any_specific:
+        do_ui = args.ui_only
+        do_usage = args.usage_only
+        do_readme = args.readme_only
+    else:
+        do_ui = True
+        do_usage = True
+        do_readme = True
 
     translator = _translator()
 
@@ -175,6 +251,9 @@ def main() -> int:
             return rc
     if do_usage:
         if (rc := translate_usage(translator)) != 0:
+            return rc
+    if do_readme:
+        if (rc := translate_readme(translator)) != 0:
             return rc
     return 0
 
