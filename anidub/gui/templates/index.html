@@ -11,6 +11,7 @@
   <span class="logo">anidub-edit</span>
   <nav>
     <button id="gpu-btn" onclick="toggleGpuPanel()" class="gpu-indicator">GPU --%</button>
+    <button id="batch-btn" onclick="toggleBatchPanel()" class="batch-btn" data-i18n="batch.btn_label">Batch Jobs</button>
     <button onclick="goHome()" data-i18n="nav.home">Home</button>
     <label class="lang-select">
       <select id="lang-select" onchange="onLangChange(this.value)" aria-label="Language">
@@ -33,6 +34,12 @@
   <div id="gpu-backends" style="font-size:0.8em;opacity:0.7"></div>
   <button onclick="clearGpuMemory()" data-i18n="gpu.clear_memory">Clear GPU Memory</button>
   <button onclick="clearGpuMemory(true)" data-i18n="gpu.force_unload">Force Unload Models</button>
+</div>
+
+<!-- Batch jobs panel -->
+<div id="batch-panel" class="batch-panel" style="display:none">
+  <strong data-i18n="batch.panel_title">Batch Jobs</strong>
+  <div id="batch-jobs-list" style="font-size:0.85em;color:#666" data-i18n="batch.no_jobs">No batch jobs running.</div>
 </div>
 
 <main>

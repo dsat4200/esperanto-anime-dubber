@@ -24,6 +24,36 @@ header {
 .gpu-bar { height: 8px; background: #1a1a2e; border-radius: 4px; overflow: hidden; }
 .gpu-bar-fill { height: 100%; background: #e94560; border-radius: 4px; transition: width 0.3s; }
 .gpu-panel button { font-size: 0.8em; padding: 3px 10px; }
+.batch-btn { font-size: 0.75em; padding: 2px 10px; background: #2a1a2a; border-color: #604; }
+.batch-panel {
+    position: fixed; top: 36px; right: 12px; z-index: 51;
+    background: #16213e; border: 1px solid #0f3460; border-radius: 6px;
+    padding: 12px; min-width: 320px; max-width: 420px; font-size: 0.85em;
+    display: flex; flex-direction: column; gap: 8px;
+    max-height: 60vh; overflow-y: auto;
+}
+.batch-job {
+    background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 8px; display: flex; flex-direction: column; gap: 4px;
+}
+.batch-job-header {
+    display: flex; justify-content: space-between; align-items: center;
+}
+.batch-job-type { font-weight: bold; color: #e94560; font-size: 0.9em; }
+.batch-job-phase { font-size: 0.75em; color: #999; }
+.batch-job-episode { font-size: 0.8em; color: #ccc; }
+.batch-job-clip { font-size: 0.75em; color: #888; display: flex; align-items: center; gap: 4px; }
+.batch-job-clip .spinner { width: 10px; height: 10px; border: 2px solid #333; border-top-color: #e94560; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+.batch-bar { height: 6px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
+.batch-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; background: #e94560; }
+.batch-job-done .batch-bar-fill { background: #0a4; }
+.batch-job-done .batch-job-phase { color: #0a4; }
+.batch-job-failed { border-color: #a30; }
+.batch-job-failed .batch-job-type { color: #e30; }
+.batch-job-failed .batch-bar-fill { background: #a30; }
+.batch-job-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.75em; color: #666; }
+.batch-job-footer button { font-size: 0.75em; padding: 2px 8px; background: #600; color: #e0e0e0; border: 1px solid #800; cursor: pointer; border-radius: 3px; }
+.batch-job-footer button:hover { background: #800; }
 nav button {
     background: #0f3460; color: #e0e0e0;
     border: 1px solid #1a1a4e;

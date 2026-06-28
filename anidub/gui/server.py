@@ -297,36 +297,72 @@ def api_batch_translate():
     skipped = info["skipped"]
 
     def _run():
-        _jobs[key] = {"running": True, "cancel": False, "type": "batch-translate", "message": "Translating..."}
+        _jobs[key] = {"running": True, "cancel": False, "type": "batch-translate", "message": "Starting..."}
+        total_translated = 0
+        failed = []
+        _progress[key] = {
+            "done": False, "phase": "init",
+            "episode_current": 0, "episode_total": len(valid),
+            "episode_name": "", "clip_current": 0, "clip_total": 0,
+            "clip_text": "", "total_translated": 0,
+            "message": "Initializing...", "skipped": skipped, "failed": [],
+        }
         try:
-            processed = 0
-            failed = []
-            _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Translating..."}
-            for stem in valid:
+            for ep_idx, stem in enumerate(valid):
                 if _jobs[key].get("cancel"):
                     break
                 try:
+                    _progress[key]["phase"] = "init"
+                    _progress[key]["episode_current"] = ep_idx + 1
+                    _progress[key]["episode_name"] = stem
+                    _progress[key]["message"] = f"Loading {stem}..."
+                    _jobs[key]["message"] = f"Loading {stem}..."
+
                     proj = _anime.select_episode(stem)
-                    # Freshly created projects (never opened in editor) have no
-                    # "order"/clips populated yet — fill them in now so
-                    # translate_all() has clips to process.
                     proj._init_timeline(force=False)
                     proj.select_audio_track(audio_idx)
                     proj.select_subtitle_track(sub_idx)
+
                     if not proj.state.get("demucs_done"):
+                        _progress[key]["phase"] = "demucs"
+                        _progress[key]["message"] = f"Demucs: {stem}..."
+                        _jobs[key]["message"] = f"Demucs: {stem}..."
                         proj.run_demucs()
-                    proj.translate_all()
-                    processed += 1
+
+                    order = proj.state.get("order", [])
+                    pending = []
+                    for cid in order:
+                        clip = proj.get_clip(cid)
+                        if clip and clip.status in (ClipStatus.PENDING, ClipStatus.REJECTED):
+                            pending.append(cid)
+
+                    _progress[key]["phase"] = "translating"
+                    _progress[key]["clip_total"] = len(pending)
+                    _progress[key]["clip_current"] = 0
+                    _jobs[key]["message"] = f"{stem} ({ep_idx+1}/{len(valid)})"
+
+                    for cl_idx, cid in enumerate(pending):
+                        if _jobs[key].get("cancel"):
+                            break
+                        clip = proj.get_clip(cid)
+                        _progress[key]["clip_current"] = cl_idx + 1
+                        _progress[key]["clip_text"] = (clip.original_text or "")[:80]
+                        _progress[key]["message"] = f"{stem}: {cl_idx+1}/{len(pending)}"
+                        _jobs[key]["message"] = f"{stem}: {cl_idx+1}/{len(pending)}"
+                        try:
+                            proj.translate_clip(cid)
+                            total_translated += 1
+                        except Exception:
+                            pass
+                        _progress[key]["total_translated"] = total_translated
+
                 except Exception as e:
                     failed.append({"stem": stem, "error": str(e)})
-                _progress[key]["current"] = processed
-                _progress[key]["message"] = f"Episode {processed}/{len(valid)}"
-                _jobs[key]["message"] = f"Translated {processed}/{len(valid)} episodes"
-                if failed:
-                    _progress[key]["failed"] = failed
-            _progress[key] = {"current": processed, "total": len(valid),
-                              "done": True, "message": f"Translated {processed}/{len(valid)} episodes",
-                              "skipped": skipped, "failed": failed}
+                _progress[key]["failed"] = failed
+
+            _progress[key]["done"] = True
+            _progress[key]["phase"] = "done"
+            _progress[key]["message"] = f"Done: {total_translated} lines in {len(valid)} episodes"
         finally:
             _jobs[key]["running"] = False
             _jobs[key]["message"] = "Done"
@@ -409,6 +445,21 @@ def api_batch_translate_progress():
 @app.route("/api/episodes/batch-clone/progress")
 def api_batch_clone_progress():
     return jsonify(_progress.get("batch-clone", {"current": 0, "total": 0, "done": True, "message": "", "skipped": []}))
+
+
+@app.route("/api/batch-jobs")
+def api_batch_jobs():
+    result = {}
+    for key in ("batch-translate", "batch-clone"):
+        job = _jobs.get(key)
+        if job and job.get("running"):
+            result[key] = {
+                "running": True,
+                "type": job.get("type", key),
+                "message": job.get("message", ""),
+                "progress": _progress.get(key, {}),
+            }
+    return jsonify(result)
 
 
 # ── Setup (per episode) ───────────────────────

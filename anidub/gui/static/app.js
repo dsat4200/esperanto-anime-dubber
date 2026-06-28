@@ -645,18 +645,42 @@ async function runBatch(type) {
     const key = type === 'translate' ? 'batch-translate' : 'batch-clone';
     const endpoint = type === 'translate' ? '/api/episodes/batch-translate' : '/api/episodes/batch-clone';
 
-    showOverlay(type === 'translate' ? t('overlay.translating_episodes') : t('overlay.cloning_episodes'));
     try {
         await api(endpoint, {
             method: 'POST',
             body: { stems, audio_idx: batchTrackAudioIdx, sub_idx: batchTrackSubIdx },
         });
         startJobPolling(key);
-        await pollBatchProgress(key);
-        selectedEpisodes.clear();
-        await loadEpisodes();
+        // Open batch panel to show live progress.
+        const panel = document.getElementById('batch-panel');
+        if (panel.style.display === 'none' || !panel.style.display) {
+            panel.style.display = 'flex';
+            if (batchTimer) clearInterval(batchTimer);
+            batchTimer = setInterval(refreshBatchJobs, 500);
+        }
+        // Watch for completion to refresh episode cards.
+        watchBatchCompletion(key);
     } catch (e) { alert(t('alert.batch_failed_template').replace('{type}', type) + e.message); }
-    hideOverlay();
+}
+
+let _batchCompletionWatchers = {};
+function watchBatchCompletion(key) {
+    if (_batchCompletionWatchers[key]) clearInterval(_batchCompletionWatchers[key]);
+    _batchCompletionWatchers[key] = setInterval(async () => {
+        try {
+            const jobs = await api('/api/jobs');
+            const job = jobs[key];
+            if (!job || !job.running) {
+                clearInterval(_batchCompletionWatchers[key]);
+                delete _batchCompletionWatchers[key];
+                selectedEpisodes.clear();
+                updateSelectionUI();
+                await loadEpisodes();
+                await refreshEpisodeBars();
+                document.getElementById('bulk-status').textContent = t('bulk.status_complete');
+            }
+        } catch (e) {}
+    }, 2000);
 }
 
 async function pollBatchProgress(key) {
@@ -774,14 +798,127 @@ async function clearGpuMemory(force) {
     await refreshGpuStats();
 }
 
+// ── Batch Jobs Panel ──────────────────────────
+
+let batchTimer = null;
+
+async function toggleBatchPanel() {
+    const panel = document.getElementById('batch-panel');
+    if (panel.style.display === 'none' || !panel.style.display) {
+        panel.style.display = 'flex';
+        await refreshBatchJobs();
+        if (batchTimer) clearInterval(batchTimer);
+        batchTimer = setInterval(refreshBatchJobs, 500);
+    } else {
+        panel.style.display = 'none';
+        if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
+    }
+}
+
+async function refreshBatchJobs() {
+    try {
+        const jobs = await api('/api/batch-jobs');
+        const list = document.getElementById('batch-jobs-list');
+        const btn = document.getElementById('batch-btn');
+        const keys = Object.keys(jobs);
+        if (!keys.length) {
+            list.innerHTML = '<span style="color:#666">' + escHtml(t('batch.no_jobs')) + '</span>';
+            btn.style.color = '#ccc';
+            return;
+        }
+        btn.style.color = '#e94560';
+        btn.textContent = t('batch.btn_label') + ' (' + keys.length + ')';
+        let anyDone = false;
+        list.innerHTML = keys.map(key => {
+            const j = jobs[key];
+            const p = j.progress || {};
+            const isDone = p.done;
+            const isFailed = (p.failed || []).length > 0 && isDone;
+            const phase = p.phase || '';
+            const totalTranslated = p.total_translated || 0;
+            const epCurrent = p.episode_current || 0;
+            const epTotal = p.episode_total || 0;
+            const clipCurrent = p.clip_current || 0;
+            const clipTotal = p.clip_total || 0;
+            const clipText = p.clip_text || '';
+            const episodeName = p.episode_name || '';
+            const message = p.message || '';
+            const skipped = p.skipped || [];
+            const failed = p.failed || [];
+            let pct = 0;
+            if (epTotal > 0) {
+                const epFrac = epCurrent / epTotal;
+                const clipFrac = clipTotal > 0 ? clipCurrent / clipTotal : 1;
+                pct = Math.round(((epCurrent - 1 + clipFrac) / epTotal) * 100);
+            }
+            if (isDone) {
+                pct = failed.length ? 100 : 100;
+                anyDone = true;
+            }
+            const typeLabel = j.type === 'batch-clone' ? t('batch.label_clone') : t('batch.label_translate');
+            let phaseLabel = '';
+            if (isDone) {
+                if (failed.length) phaseLabel = t('batch.status_failed').replace('{count}', failed.length);
+                else phaseLabel = t('batch.status_done').replace('{count}', epTotal);
+            } else if (phase === 'demucs') phaseLabel = t('batch.phase_demucs');
+            else if (phase === 'translating' || phase === 'cloning') phaseLabel = t('batch.phase_translating');
+            else phaseLabel = message;
+            const cls = isDone ? (failed.length ? 'batch-job-failed' : 'batch-job-done') : '';
+            const spinnerHtml = isDone ? '' : '<span class="spinner"></span> ';
+            let lines = '';
+            if (!isDone) {
+                lines += '<div class="batch-job-episode">' + escHtml(t('batch.status_episode').replace('{current}', epCurrent).replace('{total}', epTotal));
+                if (episodeName) lines += ' &mdash; ' + escHtml(episodeName);
+                lines += '</div>';
+                if (phase === 'translating' && clipTotal > 0) {
+                    lines += '<div class="batch-job-clip">' + spinnerHtml + escHtml(t('batch.status_clip').replace('{current}', clipCurrent).replace('{total}', clipTotal));
+                    if (clipText) lines += ' &mdash; "' + escHtml(clipText) + '"';
+                    lines += '</div>';
+                }
+            } else {
+                if (totalTranslated > 0) lines += '<div class="batch-job-episode">' + totalTranslated + ' lines translated</div>';
+                if (failed.length) lines += '<div class="batch-job-episode" style="color:#e30">' + escHtml(t('batch.status_failed').replace('{count}', failed.length)) + '</div>';
+                if (skipped.length) lines += '<div class="batch-job-episode" style="color:#888">' + escHtml(t('batch.status_skipped').replace('{count}', skipped.length)) + '</div>';
+            }
+            return `<div class="batch-job ${cls}">
+                <div class="batch-job-header">
+                    <span class="batch-job-type">${escHtml(typeLabel)}</span>
+                    <span class="batch-job-phase">${escHtml(phaseLabel)}</span>
+                </div>
+                ${lines}
+                <div class="batch-bar"><div class="batch-bar-fill" style="width:${pct}%"></div></div>
+                <div class="batch-job-footer">
+                    <span>${pct}%</span>
+                    ${isDone ? '' : `<button onclick="cancelBatchJob('${key}')">` + escHtml(t('batch.cancel')) + '</button>'}
+                </div>
+            </div>`;
+        }).join('');
+        if (anyDone) {
+            await refreshEpisodeBars();
+        }
+    } catch (e) { /* silently ignore */ }
+}
+
+async function cancelBatchJob(key) {
+    await api(`/api/jobs/${key}/cancel`, { method: 'POST' });
+}
+
 async function checkRunningJobs() {
     try {
         const jobs = await api('/api/jobs');
+        let hasBatchJob = false;
         for (const [key, job] of Object.entries(jobs)) {
             if (job.running) {
                 startJobPolling(key);
+                if (key.startsWith('batch-')) hasBatchJob = true;
                 break;
             }
+        }
+        if (hasBatchJob) {
+            const panel = document.getElementById('batch-panel');
+            panel.style.display = 'flex';
+            if (batchTimer) clearInterval(batchTimer);
+            batchTimer = setInterval(refreshBatchJobs, 500);
         }
     } catch (e) {}
 }
