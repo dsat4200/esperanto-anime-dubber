@@ -1336,6 +1336,20 @@ async function assembleFull() {
     } catch (e) { alert(t('alert.assemble_failed') + e.message); }
     hideOverlay();
 }
+async function generatePlaybackPreviews() {
+    showOverlay('Generating previews...');
+    try {
+        const info = await api('/api/playback/generate-previews', { method: 'POST' });
+        startJobPolling('playback-previews');
+        await pollProgress('playback-previews', '', 'Generated ' + info.total + ' previews');
+        document.getElementById('bulk-status').textContent = 'Previews complete.';
+        if (playback.mode === 'on') await refreshPlaybackPlan();
+    } catch (e) {
+        alert('Generate previews failed: ' + e.message);
+        document.getElementById('bulk-status').textContent = '';
+    }
+    hideOverlay();
+}
 function fmtTs(sec) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
@@ -1492,6 +1506,29 @@ function startSegment(idx, localTime) {
 function swapToStandby() {
     const stand = otherSlot(playback.activeEl);
     const nextIdx = playback.segIndex + 1;
+    const seg = playback.plan[nextIdx];
+    if (!seg) {
+        playback.advancing = false;
+        return;
+    }
+    if (!stand.duration || stand.duration <= 0) {
+        const onCanPlay = () => {
+            stand.removeEventListener('canplay', onCanPlay);
+            if (stand.duration <= 0) { playback.advancing = false; return; }
+            playback.activeEl.pause();
+            playback.activeEl.removeAttribute('src');
+            playback.activeEl.load();
+            playback.activeEl.style.display = 'none';
+            playback.activeEl = stand;
+            playback.segIndex = nextIdx;
+            showActiveVideo();
+            if (playback.running) playElement(stand);
+            prefetchNext();
+            playback.advancing = false;
+        };
+        stand.addEventListener('canplay', onCanPlay, { once: true });
+        return;
+    }
     playback.activeEl.pause();
     playback.activeEl.removeAttribute('src');
     playback.activeEl.load();
@@ -1513,10 +1550,25 @@ function advanceSegment() {
         return;
     }
     const stand = otherSlot(playback.activeEl);
-    if (playback.standbyIndex === nextIdx && stand.readyState >= 2 && stand.src) {
+    if (playback.standbyIndex === nextIdx && stand.readyState >= 3 && stand.src && stand.duration > 0) {
         swapToStandby();
         playback.advancing = false;
+    } else if (playback.standbyIndex === nextIdx && stand.readyState >= 2 && stand.src) {
+        // Buffer exists but not enough data yet — wait for canplay
+        const onCanPlay = () => {
+            stand.removeEventListener('canplay', onCanPlay);
+            if (stand.duration <= 0) {
+                fallbackLoadActive();
+                return;
+            }
+            swapToStandby();
+            playback.advancing = false;
+        };
+        stand.addEventListener('canplay', onCanPlay, { once: true });
     } else {
+        fallbackLoadActive();
+    }
+    function fallbackLoadActive() {
         playback.segIndex = nextIdx;
         const seg = playback.plan[nextIdx];
         const el = playback.activeEl;
@@ -1524,12 +1576,16 @@ function advanceSegment() {
         let started = false;
         const onMeta = () => {
             if (started) return; started = true;
+            if (!el.duration || el.duration <= 0) {
+                playback.advancing = false;
+                return;
+            }
             if (playback.running) playElement(el);
             playback.advancing = false;
             prefetchNext();
         };
         el.addEventListener('loadedmetadata', onMeta, { once: true });
-        setTimeout(() => { if (playback.advancing) playback.advancing = false; }, 5000);
+        setTimeout(() => { if (playback.advancing) playback.advancing = false; }, 15000);
     }
 }
 
@@ -1577,9 +1633,8 @@ async function enterAutoPlayMode() {
         () => { try { playback.activeEl.currentTime = 0; } catch (e) {} },
         { once: true });
     prefetchNext();
-    updatePlaybackOverlay(playback.plan[startIdx]);
+updatePlaybackOverlay(playback.plan[startIdx]);
     updatePlaybackTimeUI();
-    schedulePlaybackPrepare();
     drawTimeline();
 }
 
@@ -1662,6 +1717,7 @@ function updatePlaybackOverlay(seg) {
     const overlay = document.getElementById('subtitle-overlay');
     if (!overlay) return;
     if (seg.kind !== 'clip') { overlay.classList.remove('active'); overlay.innerHTML = ''; return; }
+    if (seg.has_preview) { overlay.classList.remove('active'); overlay.innerHTML = ''; return; }
     const text = seg.translated_text || seg.original_text || '';
     if (!text.trim() || seg.status === 'non_dub' || seg.status === 'sign') {
         overlay.classList.remove('active'); overlay.innerHTML = ''; return;
@@ -1686,15 +1742,6 @@ async function syncCurrentClipFromPlayback(clipId) {
         renderClip();
         drawTimeline();
     } catch (e) { console.error('syncCurrentClip:', e); }
-}
-
-function schedulePlaybackPrepare() {
-    const needs = playback.plan
-        .filter(s => s.kind === 'clip' && s.dubbed && !s.ready)
-        .map(s => s.clip_id);
-    if (!needs.length) return;
-    api('/api/playback/prepare', { method: 'POST', body: { clip_ids: needs } })
-        .catch(() => {});
 }
 
 async function seekPlaybackTo(time, reloadIfNeeded) {

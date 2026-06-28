@@ -68,7 +68,7 @@
     <div id="editor-left">
       <div id="video-frame">
         <video id="video-player" controls></video>
-        <video id="video-standby" muted></video>
+        <video id="video-standby"></video>
         <div id="subtitle-overlay" class="subtitle-overlay"></div>
       </div>
 
@@ -161,6 +161,7 @@
   <div class="bulk-left">
     <button onclick="translateAll()" data-i18n="bulk.translate_all">Translate All</button>
     <button onclick="cloneAll()" data-i18n="bulk.clone_all">Clone All</button>
+    <button onclick="generatePlaybackPreviews()" data-i18n="bulk.generate_previews">Generate Previews</button>
     <span id="bulk-status"></span>
   </div>
   <div class="bulk-center">

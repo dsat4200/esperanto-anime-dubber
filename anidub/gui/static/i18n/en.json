@@ -65,6 +65,7 @@
 
   "bulk.translate_all": "Translate All",
   "bulk.clone_all": "Clone All",
+  "bulk.generate_previews": "Generate Previews",
   "bulk.status_saved": "Saved.",
   "bulk.status_complete": "Complete.",
   "bulk.done_failed_template": "Done — {count} episode(s) failed: {stems}{more}",

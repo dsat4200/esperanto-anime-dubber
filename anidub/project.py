@@ -493,11 +493,6 @@ class Project:
     def set_audio_offset(self, clip_id: str, offset_ms: float):
         entry = self._get_clip_entry(clip_id)
         entry["audio_offset_ms"] = offset_ms
-        from anidub.playback import invalidate_clip
-        try:
-            invalidate_clip(self, clip_id)
-        except Exception:
-            pass
         self.save()
 
     def set_clip_status(self, clip_id: str, status: str):
@@ -595,12 +590,6 @@ class Project:
         if entry.get("ref_source") == "character":
             entry["ref_clip"] = str(ref_wav.relative_to(self.path))
         self.save()
-
-        from anidub.playback import prepare_playback_audio, invalidate_clip
-        try:
-            prepare_playback_audio(self, clip_id)
-        except Exception:
-            pass
         return result
 
     def preview_clip(self, clip_id: str) -> Path:
@@ -691,11 +680,6 @@ class Project:
         entry["speed_factor"] = 1.0
         entry["pronunciation_override"] = None
         self.save()
-        from anidub.playback import invalidate_clip
-        try:
-            invalidate_clip(self, clip_id)
-        except Exception:
-            pass
 
     # ═══════════════════════════════════════════
     #  Bulk operations

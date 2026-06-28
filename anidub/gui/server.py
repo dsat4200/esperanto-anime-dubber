@@ -1015,86 +1015,114 @@ def api_playback_segment():
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
-    from anidub.playback import render_segment, segment_path
     clip_id = request.args.get("clip_id")
     start = request.args.get("start")
     end = request.args.get("end")
+
+    # ── cloned clip with existing preview ──
+    if clip_id:
+        preview_mp4 = proj.path / "lines" / clip_id / "preview.mp4"
+        if preview_mp4.exists() and preview_mp4.stat().st_size > 1024:
+            return _send_file_range(str(preview_mp4), "video/mp4")
+
+    # ── known time range → slice video_only + original audio ──
+    clip_start = start
+    clip_end = end
     if clip_id:
         clip = proj.get_clip(clip_id)
-        if not clip:
-            return jsonify({"error": "Clip not found"}), 404
-        seg = {
-            "kind": "clip", "clip_id": clip_id,
-            "start": clip.start_sec, "end": clip.end_sec,
-            "dubbed": bool(clip.clone_path) and clip.status not in (
-                ClipStatus.NON_DUB, ClipStatus.SIGN),
-        }
-    elif start is not None and end is not None:
-        seg = {"kind": "gap", "clip_id": None,
-               "start": float(start), "end": float(end), "dubbed": False}
-    else:
+        if clip:
+            clip_start = clip.start_sec
+            clip_end = clip.end_sec
+
+    if clip_start is None or clip_end is None:
         return jsonify({"error": "Need clip_id or start+end"}), 400
 
+    start_s = float(clip_start)
+    end_s = float(clip_end)
+    dur = end_s - start_s
+    ffmpeg = str(Path(get_ffmpeg_location()) / "ffmpeg.exe")
+    video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
+    audio = proj._audio_path()
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp.close()
+
     try:
-        path = render_segment(proj, seg)
+        if audio and audio.exists():
+            sp.run([ffmpeg, "-y", "-loglevel", "error",
+                    "-ss", f"{start_s:.3f}", "-t", f"{dur:.3f}",
+                    "-i", str(video_src),
+                    "-ss", f"{start_s:.3f}", "-t", f"{dur:.3f}",
+                    "-i", str(audio),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart", "-shortest", tmp.name], check=True)
+        else:
+            sp.run([ffmpeg, "-y", "-loglevel", "error",
+                    "-ss", f"{start_s:.3f}", "-t", f"{dur:.3f}",
+                    "-i", str(video_src),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-movflags", "+faststart", tmp.name], check=True)
+        return _send_file_range(tmp.name, "video/mp4")
     except Exception as e:
         _log.error("playback render failed: %s", e)
         return jsonify({"error": str(e)}), 500
-    if not path.exists():
-        return jsonify({"error": "Segment not generated"}), 500
-    return _send_file_range(str(path), "video/mp4")
 
 
-@app.route("/api/playback/prepare", methods=["POST"])
-def api_playback_prepare():
+@app.route("/api/playback/generate-previews", methods=["POST"])
+def api_playback_generate_previews():
     err = _require_project()
     if err: return err
-    data = request.get_json(silent=True) or {}
-    clip_ids = data.get("clip_ids") or []
     proj = _anime.get_active_project()
-    key = "playback-prepare"
+    order = list(proj.state.get("order", []))
+    total = len(order)
+    key = "playback-previews"
 
     def _run():
-        from anidub.playback import ensure_playback_ready
-        _jobs[key] = {"running": True, "cancel": False, "type": "playback-prepare",
-                      "message": "Preparing playback..."}
+        _jobs[key] = {"running": True, "cancel": False, "type": "playback-previews",
+                      "message": "Generating previews..."}
+        processed = 0
+        failed: list[dict] = []
         try:
-            ids = list(clip_ids) or list(proj.state.get("order", []))
-            _progress[key] = {"current": 0, "total": len(ids), "done": False,
-                              "message": "Preparing...", "failed": []}
-            from anidub.playback import prepare_playback_audio
-            prepared = 0
-            failed = []
-            for i, cid in enumerate(ids):
+            _progress[key] = {"current": 0, "total": total, "done": False,
+                              "message": "Generating...", "failed": []}
+            for i, cid in enumerate(order):
                 if _jobs[key].get("cancel"):
                     break
                 clip = proj.get_clip(cid)
-                if not clip or not clip.clone_path or \
-                        clip.status in (ClipStatus.NON_DUB, ClipStatus.SIGN):
+                if not clip or not clip.clone_path:
+                    _progress[key]["current"] = i + 1
+                    continue
+                if clip.status in (ClipStatus.NON_DUB, ClipStatus.SIGN):
+                    _progress[key]["current"] = i + 1
+                    continue
+                # Skip clips that already have a preview
+                preview_mp4 = proj.path / "lines" / cid / "preview.mp4"
+                if preview_mp4.exists() and preview_mp4.stat().st_size > 1024:
                     _progress[key]["current"] = i + 1
                     continue
                 try:
-                    prepare_playback_audio(proj, cid)
-                    prepared += 1
+                    proj.preview_clip(cid)
+                    processed += 1
                 except Exception as e:
                     failed.append({"clip_id": cid, "error": str(e)})
                 _progress[key]["current"] = i + 1
-                _progress[key]["message"] = f"Prepared {prepared}/{len(ids)}"
+                _progress[key]["message"] = f"{processed}/{total}"
                 _jobs[key]["message"] = _progress[key]["message"]
             _progress[key]["done"] = True
             _progress[key]["failed"] = failed
-            _progress[key]["message"] = f"Prepared {prepared} clips"
+            _progress[key]["message"] = f"Generated {processed} previews"
         finally:
             _jobs[key]["running"] = False
+            _jobs[key]["message"] = "Done"
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"started": True, "total": len(clip_ids) or
-                    len(proj.state.get("order", []))})
+    return jsonify({"started": True, "total": total})
 
 
-@app.route("/api/playback/prepare/progress")
-def api_playback_prepare_progress():
-    return jsonify(_progress.get("playback-prepare",
+@app.route("/api/playback/generate-previews/progress")
+def api_playback_generate_previews_progress():
+    return jsonify(_progress.get("playback-previews",
                                  {"current": 0, "total": 0, "done": True, "message": ""}))
 
 
