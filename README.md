@@ -149,6 +149,7 @@ For a single-episode open, the editor auto-selects the first audio + subtitle tr
 
 <!-- SCREENCAP: track-picker modal showing audio and subtitle radio choices -->
 ![alt text](image-2.png)
+![alt text](image-9.png)
 ---
 
 ## 4. Demucs Separation
