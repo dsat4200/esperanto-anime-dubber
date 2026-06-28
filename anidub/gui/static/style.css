@@ -88,11 +88,12 @@ main {
     background: #000; border-radius: 4px;
 }
 #video-frame {
-    position: relative; width: 100%; max-height: 420px;
+    position: relative; width: 100%; min-height: 240px; max-height: 420px;
+    aspect-ratio: 16 / 9;
     background: #000; border-radius: 4px; overflow: hidden;
 }
 #video-frame video {
-    width: 100%; max-height: 420px; display: block;
+    width: 100%; height: auto; max-height: 420px; display: block;
 }
 #video-standby { display: none; }
 .subtitle-overlay {

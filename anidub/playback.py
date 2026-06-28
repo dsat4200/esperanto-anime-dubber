@@ -148,10 +148,16 @@ def prepare_playback_audio(proj, clip_id: str) -> Path:
 
 
 def render_segment(proj, seg: dict) -> Path:
-    """Produce (or return cached) mp4 for one plan segment. CPU-only."""
+    """Produce (or return cached) mp4 for one plan segment. CPU-only.
+
+    Writes to a ``.tmp`` file then atomically renames, so a crashed/aborted
+    render never leaves a corrupt cache entry masquerading as ready.
+    """
     out = segment_path(proj, seg)
-    if out.exists() and out.stat().st_size > 0:
+    if out.exists() and out.stat().st_size > 1024:
         return out
+    if out.exists():
+        out.unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     bin_path = _ffmpeg_bin()
     video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
@@ -173,22 +179,31 @@ def render_segment(proj, seg: dict) -> Path:
     if audio_src is None:
         audio_src = proj._audio_path()
 
-    if not audio_src or not Path(audio_src).exists():
-        subprocess.run([bin_path, "-y", "-loglevel", "error",
-                        "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
-                        "-i", str(video_src),
-                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                        "-movflags", "+faststart", "-an", str(out)], check=True)
-    else:
-        audio_src = Path(audio_src)
-        subprocess.run([bin_path, "-y", "-loglevel", "error",
-                        "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
-                        "-i", str(video_src),
-                        "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
-                        "-i", str(audio_src),
-                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-movflags", "+faststart", "-shortest", str(out)], check=True)
+    tmp = out.with_suffix(".mp4.tmp")
+    try:
+        if not audio_src or not Path(audio_src).exists():
+            subprocess.run([bin_path, "-y", "-loglevel", "error",
+                            "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+                            "-i", str(video_src),
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                            "-movflags", "+faststart", "-an", str(tmp)], check=True)
+        else:
+            audio_src = Path(audio_src)
+            subprocess.run([bin_path, "-y", "-loglevel", "error",
+                            "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+                            "-i", str(video_src),
+                            "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+                            "-i", str(audio_src),
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                            "-c:a", "aac", "-b:a", "128k",
+                            "-movflags", "+faststart", "-shortest", str(tmp)], check=True)
+        if not tmp.exists() or tmp.stat().st_size <= 1024:
+            raise RuntimeError("ffmpeg produced no output")
+        import os
+        os.replace(str(tmp), str(out))
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return out
 
 
