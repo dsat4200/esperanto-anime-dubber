@@ -81,10 +81,6 @@ anime/
 ├── call_of_the_night/
 │   ├── Call.of.the.Night.S01E01.mkv
 │   └── Call.of.the.Night.S01E01_eo.ass
-│
-└── oreimo/
-    ├── Oreimo - 01.mkv
-    └── Oreimo - 01.ass
 ```
 
 ### MKV requirements
@@ -168,6 +164,12 @@ This runs once per episode and may take a few minutes. A status overlay shows pr
 <!-- SCREENCAP: "Running Demucs (may take a few minutes)..." overlay -->
 ![alt text](screenshots/image-3.png)
 ---
+
+## Recommended Workflow (new episode)
+- First, run a "translate all".
+- Then, run a "Clone all" once that's complete.
+- Finally, run "generate previews"
+- Then, you can go through the episodes and fix clips with issues.
 
 ## 5. Translating
 

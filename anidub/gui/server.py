@@ -469,10 +469,14 @@ def api_tracks():
     err = _require_project()
     if err: return err
     proj = _anime.get_active_project()
+    source = proj.state.get("source", {})
     return jsonify({
         "audio": proj.get_audio_tracks(),
         "subtitle": proj.get_subtitle_tracks(),
+        "selected_audio_idx": source.get("audio_track_rel", -1),
+        "selected_sub_idx": source.get("subtitle_track_rel", -1),
         "demucs_done": proj.state.get("demucs_done", False),
+        "tracks_confirmed": proj.state.get("tracks_confirmed", False),
     })
 
 
@@ -492,6 +496,23 @@ def api_sub_track():
     data = request.get_json(silent=True) or {}
     _anime.get_active_project().select_subtitle_track(data.get("index", 0))
     return jsonify({"ok": True})
+
+
+@app.route("/api/tracks/confirm", methods=["POST"])
+def api_tracks_confirm():
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    proj = _anime.get_active_project()
+    audio_idx = data.get("audio_idx")
+    sub_idx = data.get("sub_idx")
+    if audio_idx is not None:
+        proj.select_audio_track(int(audio_idx))
+    if sub_idx is not None:
+        proj.select_subtitle_track(int(sub_idx))
+    proj.state["tracks_confirmed"] = True
+    proj.save()
+    return jsonify({"ok": True, "tracks_confirmed": True})
 
 
 @app.route("/api/demucs", methods=["POST"])

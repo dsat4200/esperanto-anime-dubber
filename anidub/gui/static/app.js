@@ -269,6 +269,10 @@ async function goHome() {
 
 async function setupEditorForActive() {
     const tracks = await api('/api/tracks');
+    if (!tracks.tracks_confirmed) {
+        showEpisodeTrackPicker(tracks);
+        return;
+    }
     if (!tracks.demucs_done) {
         await runDemucsFlow();
     }
@@ -279,6 +283,10 @@ async function setupEditorForActive() {
 
 async function setupEditor() {
     const tracks = await api('/api/tracks');
+    if (!tracks.tracks_confirmed) {
+        showEpisodeTrackPicker(tracks);
+        return;
+    }
     if (!tracks.demucs_done) {
         await runDemucsFlow();
     }
@@ -636,7 +644,13 @@ async function showTrackModal() {
         data.audio.map((t, i) => `<label><input type="radio" name="m-audio" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec}, ${t.channels}ch)</label>`).join('');
     document.getElementById('modal-sub-tracks').innerHTML = '<h4>' + escHtml(t('modal.subtitles_label')) + '</h4>' +
         data.subtitle.map((t, i) => `<label><input type="radio" name="m-sub" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec})</label>`).join('');
-    document.getElementById('track-modal').style.display = 'flex';
+    const modalEl = document.getElementById('track-modal');
+    modalEl.querySelector('h3').textContent = t('modal.select_tracks_title');
+    modalEl.querySelector('.modal-hint').textContent = t('modal.select_tracks_hint');
+    modalEl.querySelector('.modal-btns').innerHTML =
+        '<button class="primary" onclick="confirmBatchTracks()" data-i18n="modal.run_button">Run</button>' +
+        '<button onclick="cancelBatchTracks()" data-i18n="modal.cancel_button">Cancel</button>';
+    modalEl.style.display = 'flex';
 }
 
 async function confirmBatchTracks() {
@@ -650,6 +664,65 @@ async function confirmBatchTracks() {
 function cancelBatchTracks() {
     document.getElementById('track-modal').style.display = 'none';
     pendingBatchType = null;
+}
+
+// ── Per-episode track picker ──
+
+function showEpisodeTrackPicker(data) {
+    const selAudio = data.selected_audio_idx;
+    const selSub = data.selected_sub_idx;
+    document.getElementById('modal-audio-tracks').innerHTML = '<h4>' + escHtml(t('modal.audio_label')) + '</h4>' +
+        data.audio.map((t, i) => {
+            const checked = (selAudio >= 0 && i === selAudio) || (selAudio < 0 && i === 0);
+            return `<label><input type="radio" name="m-audio" value="${i}" ${checked ? 'checked' : ''}> ${t.language||'?'} (${t.codec}, ${t.channels}ch)</label>`;
+        }).join('');
+    document.getElementById('modal-sub-tracks').innerHTML = '<h4>' + escHtml(t('modal.subtitles_label')) + '</h4>' +
+        data.subtitle.map((t, i) => {
+            const checked = (selSub >= 0 && i === selSub) || (selSub < 0 && i === 0);
+            return `<label><input type="radio" name="m-sub" value="${i}" ${checked ? 'checked' : ''}> ${t.language||'?'} (${t.codec})</label>`;
+        }).join('');
+    const modalEl = document.getElementById('track-modal');
+    modalEl.querySelector('h3').textContent = t('modal.select_tracks_episode_title');
+    modalEl.querySelector('.modal-hint').textContent = t('modal.select_tracks_episode_hint');
+    modalEl.querySelector('.modal-btns').innerHTML =
+        '<button class="primary" onclick="confirmEpisodeTracks()" data-i18n="modal.confirm_button">Confirm</button>' +
+        '<button onclick="cancelEpisodeTracks()" data-i18n="modal.cancel_button">Cancel</button>';
+    modalEl.style.display = 'flex';
+}
+
+async function confirmEpisodeTracks() {
+    const audioIdx = parseInt(document.querySelector('input[name="m-audio"]:checked')?.value || '0');
+    const subIdx = parseInt(document.querySelector('input[name="m-sub"]:checked')?.value || '0');
+    document.getElementById('track-modal').style.display = 'none';
+    try {
+        await api('/api/tracks/confirm', { method: 'POST', body: { audio_idx: audioIdx, sub_idx: subIdx } });
+    } catch (e) {
+        alert(t('alert.track_confirm_failed') + e.message);
+        return;
+    }
+    await setupEditorContinue();
+}
+
+function cancelEpisodeTracks() {
+    document.getElementById('track-modal').style.display = 'none';
+    goHome();
+}
+
+async function setupEditorContinue() {
+    const tracks = await api('/api/tracks');
+    if (!tracks.demucs_done) {
+        await runDemucsFlow();
+    }
+    initTimelineCanvas();
+    await loadCharacters();
+    await loadTimeline();
+    document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
+    populateEpisodeDropdown();
+    if (playback.mode === 'on') {
+        await refreshPlaybackPlan();
+    }
+    const first = await getFirstUnaccepted();
+    await loadClip(first);
 }
 
 async function runBatch(type) {

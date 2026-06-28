@@ -102,13 +102,16 @@ class Project:
 
         result = decompose_mkv(mkv_path, pd.path)
 
+        audio_count = len(result["audio_tracks"])
+        sub_count = len(result["subtitle_tracks"])
         pd.state = {
             "version": 2,
             "source": {
                 "mkv_path": str(mkv_path.resolve()),
-                "audio_track_rel": 0,
-                "subtitle_track_rel": 0,
+                "audio_track_rel": 0 if audio_count == 1 else -1,
+                "subtitle_track_rel": 0 if sub_count == 1 else -1,
             },
+            "tracks_confirmed": audio_count <= 1 and sub_count <= 1,
             "tracks": {
                 "audio": [
                     {
@@ -162,6 +165,11 @@ class Project:
 
     def _migrate_if_needed(self):
         if self.state.get("clips") is not None:
+            if "tracks_confirmed" not in self.state:
+                audio_count = len(self.state.get("tracks", {}).get("audio", []))
+                sub_count = len(self.state.get("tracks", {}).get("subtitle", []))
+                self.state["tracks_confirmed"] = audio_count <= 1 and sub_count <= 1
+                self.save()
             return
         old_tl = self.state.get("timeline", [])
         if not old_tl:
@@ -197,6 +205,11 @@ class Project:
         self.state["order"] = order
         self.state["next_clip_id"] = max_id + 1
         self.state.pop("timeline", None)
+
+        if "tracks_confirmed" not in self.state:
+            audio_count = len(self.state.get("tracks", {}).get("audio", []))
+            sub_count = len(self.state.get("tracks", {}).get("subtitle", []))
+            self.state["tracks_confirmed"] = audio_count <= 1 and sub_count <= 1
         self.save()
 
     # ═══════════════════════════════════════════
@@ -332,11 +345,20 @@ class Project:
         return self.state.get("tracks", {}).get("subtitle", [])
 
     def select_audio_track(self, index: int):
+        old = self.state.get("source", {}).get("audio_track_rel", -1)
         self.state.setdefault("source", {})["audio_track_rel"] = index
+        self.state["tracks_confirmed"] = True
+        if old != index:
+            no_vocals = self.path / "no_vocals.wav"
+            vocals = self.path / "vocals.wav"
+            no_vocals.unlink(missing_ok=True)
+            vocals.unlink(missing_ok=True)
+            self.state["demucs_done"] = False
         self.save()
 
     def select_subtitle_track(self, index: int):
         self.state.setdefault("source", {})["subtitle_track_rel"] = index
+        self.state["tracks_confirmed"] = True
         self._ass_events = None
         self._ass_header = None
         self._init_timeline(force=True)

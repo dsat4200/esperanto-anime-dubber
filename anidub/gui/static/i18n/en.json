@@ -83,10 +83,13 @@
 
   "modal.select_tracks_title": "Select Tracks for Batch",
   "modal.select_tracks_hint": "Applied to all selected episodes. Episodes with different counts will be skipped.",
+  "modal.select_tracks_episode_title": "Select Tracks for Episode",
+  "modal.select_tracks_episode_hint": "Pick the audio and subtitle tracks to use for this episode.",
   "modal.audio_label": "Audio",
   "modal.subtitles_label": "Subtitles",
   "modal.run_button": "Run",
   "modal.cancel_button": "Cancel",
+  "modal.confirm_button": "Confirm",
 
   "overlay.loading_project": "Loading project...",
   "overlay.creating_project": "Creating project...",
@@ -132,6 +135,7 @@
   "alert.clone_all_failed": "Clone all failed: ",
   "alert.assemble_failed": "Assemble failed: ",
   "alert.assemble_done_prefix": "Done: ",
+  "alert.track_confirm_failed": "Track selection failed: ",
   "alert.save_char_failed": "Save failed: ",
   "alert.add_char_failed": "Add failed: ",
   "alert.enter_name": "Enter a name",
