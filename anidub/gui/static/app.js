@@ -287,6 +287,9 @@ async function setupEditor() {
     await loadTimeline();
     document.getElementById('video-player').addEventListener('timeupdate', onVideoTimeUpdate);
     populateEpisodeDropdown();
+    if (playback.mode === 'on') {
+        await refreshPlaybackPlan();
+    }
     const first = await getFirstUnaccepted();
     await loadClip(first);
 }
@@ -338,6 +341,12 @@ async function loadClip(clipId) {
         const clip = await api('/api/clips/' + clipId);
         currentClip = clip;
         renderClip();
+        if (playback.mode === 'on') {
+            const idx = playback.plan.findIndex(s => s.clip_id === clipId);
+            if (idx >= 0) seekPlaybackTo(playback.plan[idx].start);
+            drawTimeline();
+            return;
+        }
         if (clip.status === 'non_dub') {
             loadRawPreview(clip.start_sec, clip.end_sec);
         } else if (clip.needs_processing) {
@@ -1046,6 +1055,17 @@ function drawTimeline() {
             ctx.fillRect(ax + aw - 3, y + h - 6, 6, 6);
         }
     }
+
+    if (playback.mode === 'on') {
+        const x = secToPx(playback.currentTime);
+        if (x >= 0 && x <= W) {
+            ctx.strokeStyle = '#e94560';
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+            ctx.fillStyle = '#e94560';
+            ctx.beginPath(); ctx.arc(x, RULER_H, 4, 0, Math.PI * 2); ctx.fill();
+        }
+    }
 }
 
 function brighten(hex, amount) {
@@ -1092,6 +1112,12 @@ function hitTestTimeline(mx, my) {
 function onTimelineMouseDown(e) {
     const rect = e.target.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (playback.mode === 'on' && my < CLIP_TOP - 2) {
+        timelineDrag = { type: 'seek', startX: mx };
+        seekPlaybackTo(pxToSec(mx));
+        e.target.style.cursor = 'pointer';
+        return;
+    }
     const hit = hitTestTimeline(mx, my);
     timelineDrag = { type: hit.type, clipId: hit.clipId, startX: mx, startSec: timelineVP.startSec,
                      origStart: null, origEnd: null, origOffset: null };
@@ -1108,9 +1134,14 @@ function onTimelineMouseMove(e) {
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     if (!timelineDrag) {
         const hit = hitTestTimeline(mx, my);
-        if (hit.type === 'handle-start' || hit.type === 'handle-end' || hit.type === 'audio-handle') e.target.style.cursor = 'ew-resize';
+        if (playback.mode === 'on' && my < CLIP_TOP - 2) e.target.style.cursor = 'pointer';
+        else if (hit.type === 'handle-start' || hit.type === 'handle-end' || hit.type === 'audio-handle') e.target.style.cursor = 'ew-resize';
         else if (hit.type === 'clip') e.target.style.cursor = 'pointer';
         else e.target.style.cursor = 'grab';
+        return;
+    }
+    if (timelineDrag.type === 'seek') {
+        seekPlaybackTo(pxToSec(mx));
         return;
     }
     if (timelineDrag.type === 'pan') {
@@ -1134,10 +1165,10 @@ function onTimelineMouseMove(e) {
 }
 
 async function onTimelineMouseUp(e) {
-    e.target.style.cursor = 'grab';
+    if (timelineDrag && timelineDrag.type !== 'pan') e.target.style.cursor = 'grab';
     if (!timelineDrag) return;
     const drag = timelineDrag; timelineDrag = null;
-    if (drag.type === 'pan') return;
+    if (drag.type === 'pan' || drag.type === 'seek') return;
     if (!drag.clipId) return;
     const clip = timelineClips.find(c => c.clip_id === drag.clipId);
     if (!clip) return;
@@ -1310,6 +1341,342 @@ function fmtTs(sec) {
     const m = Math.floor((sec % 3600) / 60);
     const s = (sec % 60).toFixed(1);
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(4, '0')}`;
+}
+
+// ── Auto-Play Mode ─────────────────────────────
+
+let playback = {
+    mode: 'off',
+    running: false,
+    plan: [],
+    segIndex: -1,
+    currentTime: 0,
+    v1: null, v2: null,
+    activeEl: null,
+    standbyIndex: -1,
+    totalStart: 0, totalEnd: 0,
+    advancing: false,
+    raf: null,
+    overlaySyncAt: 0,
+};
+
+function setPlayBtn(playing) {
+    const btn = document.getElementById('play-btn');
+    btn.innerHTML = playing ? '\u23F8' : '\u25B6';
+    btn.classList.toggle('playing', playing);
+}
+
+function pbFmt(sec) {
+    sec = Math.max(0, sec || 0);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = (sec % 60).toFixed(1).padStart(4, '0');
+    return `${h}:${String(m).padStart(2,'0')}:${s}`;
+}
+
+function pbSegURL(seg) {
+    if (seg.kind === 'clip') {
+        return `/api/playback/segment?clip_id=${encodeURIComponent(seg.clip_id)}&_=${seg._v || 0}`;
+    }
+    return `/api/playback/segment?start=${seg.start}&end=${seg.end}`;
+}
+
+function otherSlot(el) { return el === playback.v1 ? playback.v2 : playback.v1; }
+
+function segIndexForTime(time) {
+    for (let i = 0; i < playback.plan.length; i++) {
+        const s = playback.plan[i];
+        if (s.start <= time && time < s.end) return i;
+    }
+    if (playback.plan.length && time >= playback.plan[playback.plan.length - 1].end)
+        return playback.plan.length - 1;
+    return -1;
+}
+
+async function refreshPlaybackPlan() {
+    const plan = await api('/api/playback/plan');
+    playback.plan = plan.segments || [];
+    playback.totalStart = plan.total_start || 0;
+    playback.totalEnd = plan.total_end || 0;
+    // Refresh any currentClip <-> plan link
+    if (currentClip) {
+        const idx = playback.plan.findIndex(s => s.clip_id === currentClip.clip_id);
+        if (idx >= 0 && (playback.segIndex < 0 || playback.segIndex >= playback.plan.length))
+            playback.segIndex = idx;
+    }
+}
+
+function showActiveVideo() {
+    if (playback.v1) playback.v1.style.display = (playback.activeEl === playback.v1) ? 'block' : 'none';
+    if (playback.v2) playback.v2.style.display = (playback.activeEl === playback.v2) ? 'block' : 'none';
+}
+
+function loadSegmentInto(seg, el) {
+    el.src = pbSegURL(seg);
+    el.load();
+    playback.standbyIndex = -1;
+}
+
+function prefetchNext() {
+    const nextIdx = playback.segIndex + 1;
+    if (nextIdx >= playback.plan.length) { playback.standbyIndex = -1; return; }
+    if (playback.standbyIndex === nextIdx) return;
+    const stand = otherSlot(playback.activeEl);
+    const seg = playback.plan[nextIdx];
+    stand.src = pbSegURL(seg);
+    stand.load();
+    stand.style.display = 'none';
+    stand.pause();
+    playback.standbyIndex = nextIdx;
+}
+
+function startSegment(idx, localTime) {
+    playback.segIndex = idx;
+    const seg = playback.plan[idx];
+    if (!seg) return;
+    const el = playback.activeEl;
+    showActiveVideo();
+    loadSegmentInto(seg, el);
+    let started = false;
+    const onMeta = () => {
+        if (started) return; started = true;
+        if (localTime > 0 && el.duration > localTime) {
+            try { el.currentTime = localTime; } catch (e) {}
+        }
+        if (playback.running) el.play().catch(() => {});
+    };
+    el.addEventListener('loadedmetadata', onMeta, { once: true });
+    prefetchNext();
+}
+
+function swapToStandby() {
+    const stand = otherSlot(playback.activeEl);
+    const nextIdx = playback.segIndex + 1;
+    playback.activeEl.pause();
+    playback.activeEl.removeAttribute('src');
+    playback.activeEl.load();
+    playback.activeEl.style.display = 'none';
+    playback.activeEl = stand;
+    playback.segIndex = nextIdx;
+    showActiveVideo();
+    stand.play().catch(() => {});
+    prefetchNext();
+}
+
+function advanceSegment() {
+    if (playback.advancing) return;
+    playback.advancing = true;
+    const nextIdx = playback.segIndex + 1;
+    if (nextIdx >= playback.plan.length) {
+        stopPlayback(true);
+        playback.advancing = false;
+        return;
+    }
+    const stand = otherSlot(playback.activeEl);
+    if (playback.standbyIndex === nextIdx && stand.readyState >= 2 && stand.src) {
+        swapToStandby();
+        playback.advancing = false;
+    } else {
+        playback.segIndex = nextIdx;
+        const seg = playback.plan[nextIdx];
+        const el = playback.activeEl;
+        loadSegmentInto(seg, el);
+        let started = false;
+        const onMeta = () => {
+            if (started) return; started = true;
+            if (playback.running) el.play().catch(() => {});
+            playback.advancing = false;
+            prefetchNext();
+        };
+        el.addEventListener('loadedmetadata', onMeta, { once: true });
+        setTimeout(() => { if (playback.advancing) playback.advancing = false; }, 5000);
+    }
+}
+
+async function toggleAutoPlayMode() {
+    if (playback.mode === 'off') await enterAutoPlayMode();
+    else exitAutoPlayMode();
+}
+
+async function enterAutoPlayMode() {
+    if (!timelineClips.length) {
+        alert('No clips to play.');
+        return;
+    }
+    playback.mode = 'on';
+    playback.v1 = document.getElementById('video-player');
+    playback.v2 = document.getElementById('video-standby');
+    if (!playback.activeEl) playback.activeEl = playback.v1;
+    playback.v1.removeAttribute('controls');
+    playback.v2.removeAttribute('controls');
+    playback.v2.style.display = 'none';
+    document.getElementById('playback-time').classList.remove('hidden');
+    const toggle = document.getElementById('autoplay-toggle');
+    toggle.classList.add('on');
+    toggle.textContent = 'Auto Play: On';
+
+    await refreshPlaybackPlan();
+    if (!playback.plan.length) { exitAutoPlayMode(); return; }
+
+    let startIdx = 0;
+    if (currentClip) {
+        const f = playback.plan.findIndex(s => s.clip_id === currentClip.clip_id);
+        if (f >= 0) startIdx = f;
+    }
+    playback.segIndex = startIdx;
+    playback.currentTime = playback.plan[startIdx].start;
+    showActiveVideo();
+    // Pre-load current segment (paused; user presses play)
+    loadSegmentInto(playback.plan[startIdx], playback.activeEl);
+    playback.activeEl.addEventListener('loadedmetadata',
+        () => { try { playback.activeEl.currentTime = 0; } catch (e) {} },
+        { once: true });
+    prefetchNext();
+    updatePlaybackOverlay(playback.plan[startIdx]);
+    updatePlaybackTimeUI();
+    schedulePlaybackPrepare();
+    drawTimeline();
+    playPlayback();
+}
+
+function exitAutoPlayMode() {
+    playback.mode = 'off';
+    stopPlayback(false);
+    if (playback.v1) playback.v1.setAttribute('controls', '');
+    if (playback.v2) { playback.v2.pause(); playback.v2.removeAttribute('src'); playback.v2.load(); playback.v2.style.display = 'none'; }
+    document.getElementById('playback-time').classList.add('hidden');
+    const toggle = document.getElementById('autoplay-toggle');
+    toggle.classList.remove('on');
+    toggle.textContent = 'Auto Play: Off';
+    document.getElementById('subtitle-overlay').classList.remove('active');
+    if (currentClip) {
+        if (currentClip.status === 'non_dub') loadRawPreview(currentClip.start_sec, currentClip.end_sec);
+        else if (currentClip.clone_path) previewCurrent();
+    }
+    drawTimeline();
+}
+
+function togglePlayback() {
+    if (playback.mode !== 'on') { toggleAutoPlayMode(); return; }
+    if (playback.running) pausePlayback();
+    else playPlayback();
+}
+
+function playPlayback() {
+    if (!playback.plan.length) return;
+    if (!playback.activeEl.src) startSegment(playback.segIndex, 0);
+    else playback.activeEl.play().catch(() => {});
+    playback.running = true;
+    setPlayBtn(true);
+    if (playback.raf) cancelAnimationFrame(playback.raf);
+    playbackTick();
+}
+
+function pausePlayback() {
+    playback.running = false;
+    if (playback.activeEl) playback.activeEl.pause();
+    setPlayBtn(false);
+    if (playback.raf) cancelAnimationFrame(playback.raf);
+}
+
+function stopPlayback(completed) {
+    playback.running = false;
+    if (playback.activeEl) playback.activeEl.pause();
+    setPlayBtn(false);
+    if (playback.raf) cancelAnimationFrame(playback.raf);
+    if (completed) {
+        const total = playback.totalEnd - playback.totalStart;
+        document.getElementById('playback-time').textContent = pbFmt(total) + ' / ' + pbFmt(total);
+        document.getElementById('subtitle-overlay').classList.remove('active');
+    }
+}
+
+function playbackTick() {
+    if (!playback.running) return;
+    const seg = playback.plan[playback.segIndex];
+    if (!seg) { stopPlayback(false); return; }
+    const el = playback.activeEl;
+    const local = el.currentTime || 0;
+    const dur = seg.end - seg.start;
+    playback.currentTime = Math.min(seg.start + local, seg.end);
+    updatePlaybackOverlay(seg);
+    updatePlaybackTimeUI();
+    drawTimeline();
+    if (seg.kind === 'clip' && (!currentClip || currentClip.clip_id !== seg.clip_id) &&
+        Date.now() - playback.overlaySyncAt > 200) {
+        playback.overlaySyncAt = Date.now();
+        syncCurrentClipFromPlayback(seg.clip_id);
+    }
+    if (!playback.advancing && (el.ended ||
+        (el.duration && el.duration > 0 && local >= dur - 0.05))) {
+        advanceSegment();
+    }
+    playback.raf = requestAnimationFrame(playbackTick);
+}
+
+function updatePlaybackOverlay(seg) {
+    const overlay = document.getElementById('subtitle-overlay');
+    if (!overlay) return;
+    if (seg.kind !== 'clip') { overlay.classList.remove('active'); overlay.innerHTML = ''; return; }
+    const text = seg.translated_text || seg.original_text || '';
+    if (!text.trim() || seg.status === 'non_dub' || seg.status === 'sign') {
+        overlay.classList.remove('active'); overlay.innerHTML = ''; return;
+    }
+    let html = '';
+    if (seg.character) html += `<span class="sub-character">${escHtml(seg.character)}</span>`;
+    html += escHtml(text);
+    overlay.innerHTML = html;
+    overlay.classList.add('active');
+}
+
+function updatePlaybackTimeUI() {
+    const total = playback.totalEnd - playback.totalStart;
+    const cur = Math.max(0, playback.currentTime - playback.totalStart);
+    document.getElementById('playback-time').textContent = pbFmt(cur) + ' / ' + pbFmt(total);
+}
+
+async function syncCurrentClipFromPlayback(clipId) {
+    try {
+        const clip = await api('/api/clips/' + clipId);
+        currentClip = clip;
+        renderClip();
+        drawTimeline();
+    } catch (e) { console.error('syncCurrentClip:', e); }
+}
+
+function schedulePlaybackPrepare() {
+    const needs = playback.plan
+        .filter(s => s.kind === 'clip' && s.dubbed && !s.ready)
+        .map(s => s.clip_id);
+    if (!needs.length) return;
+    api('/api/playback/prepare', { method: 'POST', body: { clip_ids: needs } })
+        .catch(() => {});
+}
+
+async function seekPlaybackTo(time, reloadIfNeeded) {
+    if (reloadIfNeeded === undefined) reloadIfNeeded = true;
+    playback.currentTime = time;
+    const idx = segIndexForTime(time);
+    if (idx < 0) { drawTimeline(); return; }
+    const seg = playback.plan[idx];
+    const local = Math.max(0, time - seg.start);
+    if (idx === playback.segIndex && playback.activeEl.src) {
+        try { playback.activeEl.currentTime = local; } catch (e) {}
+    } else if (reloadIfNeeded) {
+        playback.segIndex = idx;
+        loadSegmentInto(seg, playback.activeEl);
+        let started = false;
+        const onMeta = () => {
+            if (started) return; started = true;
+            try { playback.activeEl.currentTime = local; } catch (e) {}
+            if (playback.running) playback.activeEl.play().catch(() => {});
+        };
+        playback.activeEl.addEventListener('loadedmetadata', onMeta, { once: true });
+        prefetchNext();
+    }
+    updatePlaybackOverlay(seg);
+    updatePlaybackTimeUI();
+    drawTimeline();
 }
 
 // ── Boot ─────────────────────────────────────

@@ -87,6 +87,34 @@ main {
     width: 100%; max-height: 420px;
     background: #000; border-radius: 4px;
 }
+#video-frame {
+    position: relative; width: 100%; max-height: 420px;
+    background: #000; border-radius: 4px; overflow: hidden;
+}
+#video-frame video {
+    width: 100%; max-height: 420px; display: block;
+}
+#video-standby { display: none; }
+.subtitle-overlay {
+    position: absolute; left: 50%; bottom: 8%;
+    transform: translateX(-50%);
+    max-width: 90%;
+    padding: 4px 12px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font: 600 1.15em 'Segoe UI', sans-serif;
+    text-align: center;
+    border-radius: 4px;
+    pointer-events: none;
+    line-height: 1.3;
+    text-shadow: 0 0 3px #000, 1px 1px 2px #000;
+    z-index: 5;
+    display: none;
+}
+.subtitle-overlay.active { display: block; }
+.subtitle-overlay .sub-character {
+    color: #9ad; font-size: 0.8em; display: block; margin-bottom: 2px;
+}
 #editor-right { flex: 1; display: flex; flex-direction: column; gap: 10px; }
 
 h2, h3 { color: #e94560; font-size: 1em; }
@@ -166,13 +194,33 @@ button.reset:hover { background: #777; }
 .ep-card[data-color="darkgrey"] { border-left: 4px solid #555; opacity: 0.8; }
 .ep-card[data-color="lightgrey"] { border-left: 4px solid #333; opacity: 0.6; }
 
-/* Bulk bar */
+/* Bulk bar / transport */
 #bulk-bar {
     background: #16213e; border-top: 1px solid #0f3460;
-    padding: 6px 16px; display: flex; gap: 8px; align-items: center;
-    flex-shrink: 0;
+    padding: 6px 16px; display: flex; align-items: center;
+    flex-shrink: 0; justify-content: space-between; gap: 12px;
 }
-#bulk-status { font-size: 0.85em; color: #999; }
+.bulk-left, .bulk-center, .bulk-right {
+    display: flex; align-items: center; gap: 8px;
+}
+.bulk-center { flex: 1; justify-content: center; gap: 12px; }
+.bulk-right { justify-content: flex-end; }
+#bulk-bar #bulk-status { font-size: 0.85em; color: #999; }
+#play-btn {
+    font-size: 1.1em; padding: 4px 14px; min-width: 56px;
+    background: #0a3a5e; color: #fff;
+    border: 1px solid #1a5a8e; border-radius: 4px; cursor: pointer;
+}
+#play-btn:hover { background: #1a5a8e; }
+#play-btn.playing { background: #0a4a3e; border-color: #1a8a6e; }
+#playback-time { font-family: monospace; font-size: 0.85em; color: #ccc; }
+#playback-time.hidden { visibility: hidden; }
+#autoplay-toggle {
+    font-size: 0.85em; padding: 4px 12px;
+    background: #2a1a2a; color: #ccc;
+    border: 1px solid #604; border-radius: 4px; cursor: pointer;
+}
+#autoplay-toggle.on { background: #0a4a3e; color: #fff; border-color: #1a8a6e; }
 
 /* Job bar */
 .job-bar {

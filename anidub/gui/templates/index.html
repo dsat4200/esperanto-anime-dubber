@@ -66,7 +66,11 @@
   <!-- EDITOR PANEL -->
   <div id="editor-panel" class="panel" style="display:none">
     <div id="editor-left">
-      <video id="video-player" controls></video>
+      <div id="video-frame">
+        <video id="video-player" controls></video>
+        <video id="video-standby" muted></video>
+        <div id="subtitle-overlay" class="subtitle-overlay"></div>
+      </div>
 
       <div class="field clone-only">
         <label><span data-i18n="editor.audio_shift_pre">Audio shift (</span><span id="audio-shift-val">0</span><span data-i18n="editor.audio_shift_post">ms):</span></label>
@@ -152,11 +156,20 @@
   </div>
 </main>
 
-<!-- Bulk bar -->
+<!-- Bulk bar / transport -->
 <div id="bulk-bar">
-  <button onclick="translateAll()" data-i18n="bulk.translate_all">Translate All</button>
-  <button onclick="cloneAll()" data-i18n="bulk.clone_all">Clone All</button>
-  <span id="bulk-status"></span>
+  <div class="bulk-left">
+    <button onclick="translateAll()" data-i18n="bulk.translate_all">Translate All</button>
+    <button onclick="cloneAll()" data-i18n="bulk.clone_all">Clone All</button>
+    <span id="bulk-status"></span>
+  </div>
+  <div class="bulk-center">
+    <button id="play-btn" onclick="togglePlayback()" title="Play/Pause">&#9654;</button>
+    <span id="playback-time">0:00:00.0 / 0:00:00.0</span>
+  </div>
+  <div class="bulk-right">
+    <button id="autoplay-toggle" onclick="toggleAutoPlayMode()">Auto Play: Off</button>
+  </div>
 </div>
 
 <!-- Job bar -->

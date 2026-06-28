@@ -1000,6 +1000,104 @@ def api_preview_sample():
     return jsonify({"error": f"Unknown type: {sample_type}"}), 400
 
 
+# ── Auto-play (CPU-only draft playback) ────────
+
+@app.route("/api/playback/plan")
+def api_playback_plan():
+    err = _require_project()
+    if err: return err
+    from anidub.playback import get_playback_plan
+    return jsonify(get_playback_plan(_anime.get_active_project()))
+
+
+@app.route("/api/playback/segment")
+def api_playback_segment():
+    err = _require_project()
+    if err: return err
+    proj = _anime.get_active_project()
+    from anidub.playback import render_segment, segment_path
+    clip_id = request.args.get("clip_id")
+    start = request.args.get("start")
+    end = request.args.get("end")
+    if clip_id:
+        clip = proj.get_clip(clip_id)
+        if not clip:
+            return jsonify({"error": "Clip not found"}), 404
+        seg = {
+            "kind": "clip", "clip_id": clip_id,
+            "start": clip.start_sec, "end": clip.end_sec,
+            "dubbed": bool(clip.clone_path) and clip.status not in (
+                ClipStatus.NON_DUB, ClipStatus.SIGN),
+        }
+    elif start is not None and end is not None:
+        seg = {"kind": "gap", "clip_id": None,
+               "start": float(start), "end": float(end), "dubbed": False}
+    else:
+        return jsonify({"error": "Need clip_id or start+end"}), 400
+
+    try:
+        path = render_segment(proj, seg)
+    except Exception as e:
+        _log.error("playback render failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+    if not path.exists():
+        return jsonify({"error": "Segment not generated"}), 500
+    return _send_file_range(str(path), "video/mp4")
+
+
+@app.route("/api/playback/prepare", methods=["POST"])
+def api_playback_prepare():
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    clip_ids = data.get("clip_ids") or []
+    proj = _anime.get_active_project()
+    key = "playback-prepare"
+
+    def _run():
+        from anidub.playback import ensure_playback_ready
+        _jobs[key] = {"running": True, "cancel": False, "type": "playback-prepare",
+                      "message": "Preparing playback..."}
+        try:
+            ids = list(clip_ids) or list(proj.state.get("order", []))
+            _progress[key] = {"current": 0, "total": len(ids), "done": False,
+                              "message": "Preparing...", "failed": []}
+            from anidub.playback import prepare_playback_audio
+            prepared = 0
+            failed = []
+            for i, cid in enumerate(ids):
+                if _jobs[key].get("cancel"):
+                    break
+                clip = proj.get_clip(cid)
+                if not clip or not clip.clone_path or \
+                        clip.status in (ClipStatus.NON_DUB, ClipStatus.SIGN):
+                    _progress[key]["current"] = i + 1
+                    continue
+                try:
+                    prepare_playback_audio(proj, cid)
+                    prepared += 1
+                except Exception as e:
+                    failed.append({"clip_id": cid, "error": str(e)})
+                _progress[key]["current"] = i + 1
+                _progress[key]["message"] = f"Prepared {prepared}/{len(ids)}"
+                _jobs[key]["message"] = _progress[key]["message"]
+            _progress[key]["done"] = True
+            _progress[key]["failed"] = failed
+            _progress[key]["message"] = f"Prepared {prepared} clips"
+        finally:
+            _jobs[key]["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True, "total": len(clip_ids) or
+                    len(proj.state.get("order", []))})
+
+
+@app.route("/api/playback/prepare/progress")
+def api_playback_prepare_progress():
+    return jsonify(_progress.get("playback-prepare",
+                                 {"current": 0, "total": 0, "done": True, "message": ""}))
+
+
 @app.route("/api/preview-raw", methods=["POST"])
 def api_preview_raw():
     err = _require_project()

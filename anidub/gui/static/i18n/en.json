@@ -155,5 +155,10 @@
   "info.clone_ms_template": "Clone: {sec}s",
   "info.attempts_template": "Attempts: {n}",
   "info.offset_template": "Offset: {ms}ms",
-  "info.status_prefix": "Status: "
+  "info.status_prefix": "Status: ",
+
+  "autoplay.off": "Auto Play: Off",
+  "autoplay.on": "Auto Play: On",
+  "autoplay.no_clips": "No clips to play.",
+  "autoplay.preparing": "Preparing playback segments..."
 }

@@ -141,5 +141,10 @@
   "info.clone_ms_template": "Klono: {sec}s",
   "info.attempts_template": "Provoj: {n}",
   "info.offset_template": "Ofseto: {ms} ms",
-  "info.status_prefix": "Statuso:"
+  "info.status_prefix": "Statuso:",
+
+  "autoplay.off": "Aŭtoludi: Malŝaltita",
+  "autoplay.on": "Aŭtoludi: Ŝaltita",
+  "autoplay.no_clips": "Neniu erojn por ludi.",
+  "autoplay.preparing": "Preparante ludsegmentojn..."
 }
