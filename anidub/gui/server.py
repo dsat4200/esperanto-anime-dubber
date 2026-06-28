@@ -296,26 +296,33 @@ def api_batch_translate():
         _jobs[key] = {"running": True, "cancel": False, "type": "batch-translate", "message": "Translating..."}
         try:
             processed = 0
+            failed = []
             _progress[key] = {"current": 0, "total": len(valid), "done": False, "message": "Translating..."}
             for stem in valid:
                 if _jobs[key].get("cancel"):
                     break
                 try:
                     proj = _anime.select_episode(stem)
+                    # Freshly created projects (never opened in editor) have no
+                    # "order"/clips populated yet — fill them in now so
+                    # translate_all() has clips to process.
+                    proj._init_timeline(force=False)
                     proj.select_audio_track(audio_idx)
                     proj.select_subtitle_track(sub_idx)
                     if not proj.state.get("demucs_done"):
                         proj.run_demucs()
                     proj.translate_all()
                     processed += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    failed.append({"stem": stem, "error": str(e)})
                 _progress[key]["current"] = processed
                 _progress[key]["message"] = f"Episode {processed}/{len(valid)}"
                 _jobs[key]["message"] = f"Translated {processed}/{len(valid)} episodes"
+                if failed:
+                    _progress[key]["failed"] = failed
             _progress[key] = {"current": processed, "total": len(valid),
                               "done": True, "message": f"Translated {processed}/{len(valid)} episodes",
-                              "skipped": skipped}
+                              "skipped": skipped, "failed": failed}
         finally:
             _jobs[key]["running"] = False
             _jobs[key]["message"] = "Done"
@@ -344,6 +351,7 @@ def api_batch_clone():
         whisper_model = "openai/whisper-tiny"
         backend = None
         processed = 0
+        failed = []
         _jobs[key] = {"running": True, "cancel": False, "type": "batch-clone", "message": "Loading TTS model..."}
         try:
             backend = OmniVoiceTTSBackend(whisper_model=whisper_model)
@@ -356,17 +364,20 @@ def api_batch_clone():
                     break
                 try:
                     proj = _anime.select_episode(stem)
+                    proj._init_timeline(force=False)
                     proj.select_audio_track(audio_idx)
                     proj.select_subtitle_track(sub_idx)
                     if not proj.state.get("demucs_done"):
                         proj.run_demucs()
                     proj.clone_range(backend=backend)
                     processed += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    failed.append({"stem": stem, "error": str(e)})
                 _progress[key]["current"] = processed
                 _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
                 _jobs[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"
+                if failed:
+                    _progress[key]["failed"] = failed
                 _free_vram(ipc=False)
             _progress[key]["done"] = True
             _progress[key]["message"] = f"Cloned {processed}/{len(valid)} episodes"

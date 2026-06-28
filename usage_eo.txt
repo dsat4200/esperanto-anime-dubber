@@ -1,0 +1,98 @@
+═══ ANIDUB-UZO ════════════════════════════════
+
+
+SETUP
+Unue kuru (aŭ post rekreado de .venv):
+    > .\install.ps1
+
+Instalas PyTorch CUDA, ffmpeg, ĉiujn dependecojn, kaj registras CLI-komandojn.
+
+Se vi jam havas la venv sed bezonas reregistriĝi:
+    > .\.venv\Scripts\Activate.ps1
+    > pip install -e .
+
+
+Agordo de dosierujoj
+Enmetu animeon:
+    anime/{name}/
+      Episode.Name.S01E01.mkv
+      Episode.Name.S01E02.mkv
+      ...
+
+Ĉiu MKV devas havi enigitan ASS-subtitolon (aŭ .ass-dosieron
+apud la MKV kun la sama tigo). Japana sontrako bezonata.
+
+
+GUI LABORFLUXO
+Komencu la redaktilon:
+    > anidub-edit
+
+Malfermas http://127.0.0.1:5000 en via retumilo.
+
+1 KREO DE PROJEKTO
+Enigu la nomon de la dosierujo de animeo (ekz. gabriel_dropout) kaj alklaku Malfermu.
+La redaktilo malkovras ĉiujn MKV-ojn, ĉerpas aŭd-/subtitolojn, kaj
+montras ĉiun epizodon kiel karton sur la hejma ekrano.
+
+2 MALFERMO DE EPISODO
+Duoble alklaku epizodkarton por malfermi la redaktilon.
+- Maldekstra flanka kolumno montras klipoliston (subtitolaj linioj)
+- Centro montras templinion + videan antaŭrigardan areon
+- Dekstra flanka kolumno montras la detalojn de la aktuala klipo
+
+3 Agordi AŬDON & SUBTITOLOJ
+Uzu la falmenuojn en la supra trinkejo por elekti la japanan sontrakon
+kaj la ĝusta subtitola trako.
+
+4 DEMUCS DISIGO
+Alklaku "Aparta Audio" en la ilobreto. Ĉi tio funkcias unufoje per epizodo
+kaj dividas la aŭdion en voĉon + fonon (sen_voĉo).
+
+5 TRADUKANTO
+Traduku Ĉion → tradukas ĉiun klipon en la epizodo per Guglo
+Traduku (aŭtomate detekti → Esperanto)
+Batch Traduki → tradukas ĉiujn elektitajn epizodojn samtempe
+Per-klipo → tajpu manan tradukon en la teksta areo aŭ
+alklaku la butonon Traduki
+
+6 VOĈO KLONADO
+Klonu Ĉion → generas Esperantan voĉon por ĉiu tradukita
+klipo en la nuna epizodo
+Batch Clone → generas voĉon por ĉiuj elektitaj epizodoj
+Per-klipo Klono → generas voĉon por ununura klipo
+
+7 RECENCIO
+Alklaku iun ajn klipon en la listo por aŭdi la klonitan voĉon apud la
+originala fona audio (videoantaŭprezento). Alĝustigu sonan ofseton se
+la voĉa tempo estas malŝaltita. Klaku Akcepti aŭ Malakcepti.
+
+8 MONTADO
+Alklaku "Asemble" en la supra trinkejo por konstrui la plenan sinkronigitan epizodon.
+Eligo: projects/{anime}/{epizodo}/out/{epizodo}_Dubbed.mkv
+
+Ŝanĝu markobutonon "Kompleta" por epizodo por preterlasi ĝin en estontaj aroj.
+
+
+LOAJ OPERACIOJ (HEJMEKRANO)
+
+Tenu Shift + klaku por elekti plurajn epizodkartojn, tiam alklaku:
+Batch Traduki Tradukas ĉiujn elektitajn epizodojn.
+Batch Clone Generas Esperantan voĉon por ĉiuj elektitaj
+                      episodes.
+
+Progresstangoj (Tr / Cl / Ac) sur ĉiu karto ĝisdatigo vivas dum
+bataj operacioj. Malsukcesaj epizodoj estas raportitaj post kompletigo.
+
+Trakoj povas esti elektitaj por la aro - la redaktisto petos
+elekto de audio kaj subtitoloj antaŭ ol komenci.
+
+
+GPU-MEMORO
+
+La GPU-indikilo en la supra dekstra angulo montras uzadon de VRAM.
+Alklaku ĝin → montras detalan panelon kun vivaj tensoroj / rezervitaj.
+Klarigi GPU-Memoron → liberigas kaŝmemoritan sed neuzatan VRAM-poolon.
+Forto Malŝarĝo → faligas ĉiujn ŝarĝitajn modelojn TTS + Whisper.
+
+Se VRAM superas 75% antaŭ klono, la komuna modelo estas
+aŭtomate malŝarĝita kaj rekreita por konservi limojn.

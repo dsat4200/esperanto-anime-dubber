@@ -16,6 +16,48 @@ let timelineVP = { startSec: 0, pxPerSec: 50 };
 let timelineDrag = null;
 let timelineCtxMenuClipId = null;
 
+// ── i18n ─────────────────────────────────────
+let i18n = {};
+
+async function loadI18n(lang) {
+    try {
+        const resp = await fetch('/static/i18n/' + lang + '.json', { cache: 'no-cache' });
+        i18n = await resp.json();
+    } catch (e) {
+        console.error('Failed to load i18n ' + lang + ':', e);
+        i18n = {};
+    }
+}
+
+function t(key) {
+    return i18n[key] != null ? i18n[key] : key;
+}
+
+function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        const val = i18n[key];
+        if (val != null) el.textContent = val;
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+        const key = el.getAttribute('data-i18n-ph');
+        const val = i18n[key];
+        if (val != null) el.placeholder = val;
+    });
+}
+
+async function onLangChange(lang) {
+    localStorage.setItem('anidub.lang', lang);
+    await loadI18n(lang);
+    applyI18n();
+    // Re-render dynamic UI strings so translated content appears.
+    if (currentClip) renderClip();
+    if (document.getElementById('home-episodes').style.display !== 'none') renderEpisodeHome();
+    loadProjectPicker();
+    drawTimeline();
+    refreshGpuStats();
+}
+
 const STATUS_COLORS = {
     pending: '#2a2a3e', translating: '#4a4060', translated: '#0f3460',
     cloned: '#c8a000', accepted: '#0a4', rejected: '#a30',
@@ -48,7 +90,7 @@ async function loadProjectPicker() {
     try {
         const projects = await api('/api/projects');
         const sel = document.getElementById('project-picker');
-        sel.innerHTML = '<option value="">-- load --</option>' +
+        sel.innerHTML = '<option value="">' + escHtml(t('home.picker_load_default')) + '</option>' +
             projects.map(p => `<option value="${p.path}">${p.anime_name} (${p.episode_count} eps)</option>`).join('');
     } catch (e) { console.error('project picker:', e); }
 }
@@ -61,28 +103,28 @@ function onProjectPicker() {
 async function loadSelectedProject() {
     const path = document.getElementById('project-picker').value;
     if (!path) return;
-    showOverlay('Loading project...');
+    showOverlay(t('overlay.loading_project'));
     try {
         await api('/api/open', { method: 'POST', body: { project_dir: path } });
         hideOverlay();
         await loadEpisodes();
     } catch (e) {
         hideOverlay();
-        alert('Load failed: ' + e.message);
+        alert(t('alert.load_failed') + e.message);
     }
 }
 
 async function openAnime() {
     const name = document.getElementById('anime-name').value.trim();
     if (!name) return;
-    showOverlay('Creating project...');
+    showOverlay(t('overlay.creating_project'));
     try {
         await api('/api/open', { method: 'POST', body: { anime: name } });
         hideOverlay();
         await loadEpisodes();
     } catch (e) {
         hideOverlay();
-        alert('Create failed: ' + e.message);
+        alert(t('alert.create_failed') + e.message);
     }
 }
 
@@ -108,24 +150,55 @@ function renderEpisodeHome() {
         return;
     }
     wrapper.style.display = 'block';
-    document.getElementById('home-title').textContent = dataAnimeName || 'Episodes';
+    document.getElementById('home-title').textContent = dataAnimeName || t('home.title_fallback');
     grid.innerHTML = episodes.map(ep => {
         const pct = ep.progress_pct || 0;
         const tPct = ep.translation_pct || 0;
         const cPct = ep.clone_pct || 0;
+        const trLbl = t('home.tr_label').replace('{pct}', tPct);
+        const clLbl = t('home.cl_label').replace('{pct}', cPct);
+        const acLbl = t('home.ac_label').replace('{pct}', pct);
         return `<div class="ep-card" data-color="${ep.color}" data-stem="${ep.stem}"
                      onclick="onEpisodeClick(event, '${ep.stem}')"
                      ondblclick="openEpisode('${ep.stem}')">
             <div class="ep-num">#${ep.number}</div>
             <div class="ep-title">${escHtml(ep.title || ep.stem)}</div>
             <div class="ep-bars">
-                <div class="ep-bar ep-bar-tr"><div class="ep-bar-fill" style="width:${tPct}%"></div><span>Tr ${tPct}%</span></div>
-                <div class="ep-bar ep-bar-cl"><div class="ep-bar-fill" style="width:${cPct}%"></div><span>Cl ${cPct}%</span></div>
-                <div class="ep-bar ep-bar-ac"><div class="ep-bar-fill" style="width:${pct}%"></div><span>Ac ${pct}%</span></div>
+                <div class="ep-bar ep-bar-tr"><div class="ep-bar-fill" style="width:${tPct}%"></div><span>${trLbl}</span></div>
+                <div class="ep-bar ep-bar-cl"><div class="ep-bar-fill" style="width:${cPct}%"></div><span>${clLbl}</span></div>
+                <div class="ep-bar ep-bar-ac"><div class="ep-bar-fill" style="width:${pct}%"></div><span>${acLbl}</span></div>
             </div>
         </div>`;
     }).join('');
     updateSelectionUI();
+}
+
+// Update just the Tr / Cl / Ac bars on existing episode cards without a
+// full re-render — avoids flicker and keeps selection state.
+async function refreshEpisodeBars() {
+    try {
+        const data = await api('/api/episodes');
+        for (const ep of data.episodes) {
+            const card = document.querySelector(`.ep-card[data-stem="${ep.stem}"]`);
+            if (!card) continue;
+            const tPct = ep.translation_pct || 0;
+            const cPct = ep.clone_pct || 0;
+            const pct = ep.progress_pct || 0;
+            const bars = card.querySelectorAll('.ep-bar');
+            if (bars[0]) {
+                bars[0].querySelector('.ep-bar-fill').style.width = tPct + '%';
+                bars[0].querySelector('span').textContent = t('home.tr_label').replace('{pct}', tPct);
+            }
+            if (bars[1]) {
+                bars[1].querySelector('.ep-bar-fill').style.width = cPct + '%';
+                bars[1].querySelector('span').textContent = t('home.cl_label').replace('{pct}', cPct);
+            }
+            if (bars[2]) {
+                bars[2].querySelector('.ep-bar-fill').style.width = pct + '%';
+                bars[2].querySelector('span').textContent = t('home.ac_label').replace('{pct}', pct);
+            }
+        }
+    } catch (e) {}
 }
 
 function fillColor(color) {
@@ -170,7 +243,7 @@ function updateSelectionUI() {
 // ── Open / Home ───────────────────────────────
 
 async function openEpisode(stem) {
-    showOverlay('Loading episode...');
+    showOverlay(t('overlay.loading_episode'));
     try {
         await api('/api/episodes/select', { method: 'POST', body: { stem } });
         activeStem = stem;
@@ -180,7 +253,7 @@ async function openEpisode(stem) {
         await setupEditor();
     } catch (e) {
         hideOverlay();
-        alert('Failed to open episode: ' + e.message);
+        alert(t('alert.open_episode_failed') + e.message);
     }
 }
 
@@ -219,11 +292,11 @@ async function setupEditor() {
 }
 
 async function runDemucsFlow() {
-    showOverlay('Running Demucs (may take a few minutes)...');
+    showOverlay(t('overlay.running_demucs'));
     try {
         await api('/api/demucs', { method: 'POST' });
     } catch (e) {
-        alert('Demucs failed: ' + e.message);
+        alert(t('alert.demucs_failed') + e.message);
     }
     hideOverlay();
 }
@@ -237,7 +310,7 @@ function populateEpisodeDropdown() {
 
 async function switchEpisode(stem) {
     if (!stem || stem === activeStem) return;
-    showOverlay('Switching episode...');
+    showOverlay(t('overlay.switching_episode'));
     try {
         await api('/api/episodes/select', { method: 'POST', body: { stem } });
         activeStem = stem;
@@ -245,7 +318,7 @@ async function switchEpisode(stem) {
         await setupEditor();
     } catch (e) {
         hideOverlay();
-        alert('Switch failed: ' + e.message);
+        alert(t('alert.switch_failed') + e.message);
     }
 }
 
@@ -280,14 +353,17 @@ function renderClip() {
     const c = currentClip;
     if (!c) return;
     document.getElementById('clip-title').textContent =
-        `Clip ${c.clip_id}  ${fmtTs(c.start_sec)} → ${fmtTs(c.end_sec)}`;
+        t('editor.clip_title_template')
+            .replace('{id}', c.clip_id)
+            .replace('{start}', fmtTs(c.start_sec))
+            .replace('{end}', fmtTs(c.end_sec));
     document.getElementById('original-text').textContent = c.original_text;
     document.getElementById('translation-text').value = c.translated_text || '';
     document.getElementById('pronunciation-text').value = c.pronunciation_override || '';
     document.getElementById('instruct-extra').value = c.instruct_extra || '';
 
     const sel = document.getElementById('char-select');
-    sel.innerHTML = '<option value="">-- none --</option>' +
+    sel.innerHTML = '<option value="">' + escHtml(t('editor.character_none_option')) + '</option>' +
         Object.keys(characters).map(name =>
             `<option value="${name}" ${c.character === name ? 'selected' : ''}>${name}</option>`
         ).join('');
@@ -304,12 +380,12 @@ function renderClip() {
     document.getElementById('audio-shift-val').textContent = Math.round(c.audio_offset_ms || 0);
 
     const info = [];
-    if (c.status === 'non_dub') info.push('Original audio only');
-    if (c.status === 'sign') info.push('Sign/No audio');
-    if (c.clone_ms) info.push(`Clone: ${(c.clone_ms / 1000).toFixed(1)}s`);
-    if (c.attempts) info.push(`Attempts: ${c.attempts}`);
-    if (c.audio_offset_ms) info.push(`Offset: ${c.audio_offset_ms.toFixed(0)}ms`);
-    info.push(`Status: ${c.status}`);
+    if (c.status === 'non_dub') info.push(t('info.original_audio_only'));
+    if (c.status === 'sign') info.push(t('info.sign_no_audio'));
+    if (c.clone_ms) info.push(t('info.clone_ms_template').replace('{sec}', (c.clone_ms / 1000).toFixed(1)));
+    if (c.attempts) info.push(t('info.attempts_template').replace('{n}', c.attempts));
+    if (c.audio_offset_ms) info.push(t('info.offset_template').replace('{ms}', c.audio_offset_ms.toFixed(0)));
+    info.push(t('info.status_prefix') + t('status.' + c.status));
     document.getElementById('clone-info').textContent = info.join('  |  ');
 
     const nd = c.status === 'non_dub' || c.status === 'sign';
@@ -317,12 +393,12 @@ function renderClip() {
     document.querySelectorAll('.accept-only').forEach(el => el.style.display = nd ? 'none' : '');
 
     const btnSign = document.getElementById('btn-toggle-sign');
-    btnSign.textContent = c.status === 'sign' ? 'Mark as Vocal' : 'Mark as Sign';
+    btnSign.textContent = c.status === 'sign' ? t('editor.mark_vocal') : t('editor.mark_sign');
     btnSign.style.display = c.status === 'non_dub' ? 'none' : '';
 }
 
 async function autoProcess(clipId) {
-    showOverlay('Processing...');
+    showOverlay(t('overlay.processing'));
     try {
         const char = document.getElementById('char-select').value || undefined;
         const mood = document.getElementById('mood-select').value || 'normal';
@@ -357,7 +433,7 @@ async function nextClip() {
 async function restoreTranslation() {
     const c = currentClip;
     if (!c) return;
-    showOverlay('Translating...');
+    showOverlay(t('overlay.translating'));
     try {
         const resp = await api(`/api/clips/${c.clip_id}/translate`, { method: 'POST' });
         document.getElementById('translation-text').value = resp.translated_text;
@@ -365,7 +441,7 @@ async function restoreTranslation() {
         currentClip.status = 'translated';
         renderClip();
         loadTimeline();
-    } catch (e) { alert('Translate failed: ' + e.message); }
+    } catch (e) { alert(t('alert.translate_failed') + e.message); }
     hideOverlay();
 }
 
@@ -403,7 +479,7 @@ async function saveSettings() {
 async function cloneCurrent() {
     const c = currentClip;
     if (!c) return;
-    showOverlay('Cloning...');
+    showOverlay(t('overlay.cloning'));
     try {
         const char = document.getElementById('char-select').value || undefined;
         const mood = document.getElementById('mood-select').value || 'normal';
@@ -415,21 +491,21 @@ async function cloneCurrent() {
         renderClip();
         loadTimeline();
         await previewCurrent();
-    } catch (e) { alert('Clone failed: ' + e.message); }
+    } catch (e) { alert(t('alert.clone_failed') + e.message); }
     hideOverlay();
 }
 
 async function previewCurrent() {
     const c = currentClip;
     if (!c) return;
-    showOverlay('Generating preview...');
+    showOverlay(t('overlay.generating_preview'));
     try {
         const resp = await api(`/api/clips/${c.clip_id}/preview`, { method: 'POST' });
         const video = document.getElementById('video-player');
         video.src = resp.url + '?t=' + Date.now();
         video.load();
         video.play();
-    } catch (e) { alert('Preview failed: ' + e.message); }
+    } catch (e) { alert(t('alert.preview_failed') + e.message); }
     hideOverlay();
 }
 
@@ -466,7 +542,7 @@ async function acceptCurrent() {
         loadTimeline();
         loadEpisodes();
         nextClip();
-    } catch (e) { alert('Accept failed: ' + e.message); }
+    } catch (e) { alert(t('alert.accept_failed') + e.message); }
 }
 
 async function rejectCurrent() {
@@ -543,9 +619,9 @@ async function showTrackModal() {
     const stem = selectedEpisodes.values().next().value;
     if (!stem) return;
     const data = await api('/api/tracks');
-    document.getElementById('modal-audio-tracks').innerHTML = '<h4>Audio</h4>' +
+    document.getElementById('modal-audio-tracks').innerHTML = '<h4>' + escHtml(t('modal.audio_label')) + '</h4>' +
         data.audio.map((t, i) => `<label><input type="radio" name="m-audio" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec}, ${t.channels}ch)</label>`).join('');
-    document.getElementById('modal-sub-tracks').innerHTML = '<h4>Subtitles</h4>' +
+    document.getElementById('modal-sub-tracks').innerHTML = '<h4>' + escHtml(t('modal.subtitles_label')) + '</h4>' +
         data.subtitle.map((t, i) => `<label><input type="radio" name="m-sub" value="${i}" ${i===0?'checked':''}> ${t.language||'?'} (${t.codec})</label>`).join('');
     document.getElementById('track-modal').style.display = 'flex';
 }
@@ -569,7 +645,7 @@ async function runBatch(type) {
     const key = type === 'translate' ? 'batch-translate' : 'batch-clone';
     const endpoint = type === 'translate' ? '/api/episodes/batch-translate' : '/api/episodes/batch-clone';
 
-    showOverlay(`${type === 'translate' ? 'Translating' : 'Cloning'} episodes...`);
+    showOverlay(type === 'translate' ? t('overlay.translating_episodes') : t('overlay.cloning_episodes'));
     try {
         await api(endpoint, {
             method: 'POST',
@@ -579,12 +655,13 @@ async function runBatch(type) {
         await pollBatchProgress(key);
         selectedEpisodes.clear();
         await loadEpisodes();
-    } catch (e) { alert(`Batch ${type} failed: ` + e.message); }
+    } catch (e) { alert(t('alert.batch_failed_template').replace('{type}', type) + e.message); }
     hideOverlay();
 }
 
 async function pollBatchProgress(key) {
     let done = false;
+    let lastRefresh = 0;
     while (!done) {
         await sleep(300);
         try {
@@ -592,9 +669,32 @@ async function pollBatchProgress(key) {
             document.getElementById('overlay-msg').textContent = p.message || `${key}...`;
             document.getElementById('bulk-status').textContent = p.message || '';
             if (p.done) done = true;
+            // Refresh episode cards every 5 s so Tr / Cl bars fill during batch.
+            const now = Date.now();
+            if (now - lastRefresh >= 5000) {
+                await refreshEpisodeBars();
+                lastRefresh = now;
+            }
         } catch (e) { done = true; }
     }
-    document.getElementById('bulk-status').textContent = 'Complete.';
+    // Show any failed episodes on the bulk bar so the user sees errors.
+    try {
+        const p = await api(`/api/episodes/${key}/progress`);
+        const failed = p.failed || [];
+        if (failed.length) {
+            const stems = failed.map(f => f.stem).slice(0, 5).join(', ');
+            const more = failed.length > 5 ? ` +${failed.length - 5} more` : '';
+            document.getElementById('bulk-status').textContent =
+                t('bulk.done_failed_template')
+                    .replace('{count}', failed.length)
+                    .replace('{stems}', stems)
+                    .replace('{more}', more);
+        } else {
+            document.getElementById('bulk-status').textContent = t('bulk.status_complete');
+        }
+    } catch (e) {
+        document.getElementById('bulk-status').textContent = t('bulk.status_complete');
+    }
 }
 
 async function startJobPolling(key) {
@@ -612,7 +712,7 @@ async function pollJobStatus() {
             currentJobKey = null;
             return;
         }
-        document.getElementById('job-msg').textContent = jobs[currentJobKey].message || 'Running...';
+        document.getElementById('job-msg').textContent = jobs[currentJobKey].message || t('job.running');
     } catch (e) {}
     setTimeout(pollJobStatus, 2000);
 }
@@ -620,7 +720,7 @@ async function pollJobStatus() {
 async function cancelJob() {
     if (!currentJobKey) return;
     await api(`/api/jobs/${currentJobKey}/cancel`, { method: 'POST' });
-    document.getElementById('job-msg').textContent = 'Cancelling...';
+    document.getElementById('job-msg').textContent = t('job.cancelling');
 }
 
 // ── GPU Panel ─────────────────────────────────
@@ -645,7 +745,7 @@ async function refreshGpuStats() {
         const gpu = await api('/api/gpu');
         const btn = document.getElementById('gpu-btn');
         if (!gpu.available) {
-            btn.textContent = 'GPU N/A';
+            btn.textContent = t('gpu.na');
             return;
         }
         btn.textContent = `GPU ${gpu.pct_used}%`;
@@ -659,11 +759,11 @@ async function refreshGpuStats() {
         const backends = document.getElementById('gpu-backends');
         if (backends) {
             const names = (gpu.live_backends || []).map(
-                n => n === '__shared__' ? 'Shared (manual clones)' : n
+                n => n === '__shared__' ? t('gpu.shared_manual_clones') : n
             );
             backends.textContent = names.length
-                ? `Live models: ${names.join(', ')}`
-                : 'No live TTS models loaded';
+                ? t('gpu.live_models') + names.join(', ')
+                : t('gpu.no_live_models');
         }
     } catch (e) {}
 }
@@ -967,7 +1067,7 @@ async function loadCharacters() {
     try {
         characters = await api('/api/characters');
         const sel = document.getElementById('char-select');
-        sel.innerHTML = '<option value="">-- none --</option>' +
+        sel.innerHTML = '<option value="">' + escHtml(t('editor.character_none_option')) + '</option>' +
             Object.keys(characters).map(name => `<option value="${name}">${name}</option>`).join('');
     } catch (e) { characters = {}; }
 }
@@ -980,21 +1080,21 @@ function renderCharPanel() {
     const div = document.getElementById('char-list');
     div.innerHTML = Object.entries(characters).map(([name, moods]) =>
         `<strong>${name}</strong><br>` + Object.entries(moods).map(([mood]) =>
-            `<div>${mood} <button onclick="deleteCharacter('${name}','${mood}')">del</button></div>`
+            `<div>${mood} <button onclick="deleteCharacter('${name}','${mood}')">${escHtml(t('chars.del'))}</button></div>`
         ).join('')
     ).join('<hr>');
 }
 async function saveCharacter() {
     const c = currentClip;
     if (!c) return;
-    const name = document.getElementById('char-select').value || prompt('Character name:');
+    const name = document.getElementById('char-select').value || prompt(t('prompt.character_name'));
     if (!name) return;
     const mood = document.getElementById('mood-select').value || 'normal';
-    showOverlay('Saving...');
+    showOverlay(t('overlay.saving'));
     try {
         await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
         await loadCharacters(); renderClip();
-    } catch (e) { alert('Save failed: ' + e.message); }
+    } catch (e) { alert(t('alert.save_char_failed') + e.message); }
     hideOverlay();
 }
 async function deleteCharacter(name, mood) {
@@ -1004,68 +1104,68 @@ async function deleteCharacter(name, mood) {
 async function addCharacter() {
     const name = document.getElementById('new-char-name').value.trim();
     const mood = document.getElementById('new-char-mood').value.trim() || 'normal';
-    if (!name) return alert('Enter a name');
+    if (!name) return alert(t('alert.enter_name'));
     const c = currentClip; if (!c) return;
     try {
         await api('/api/characters', { method: 'POST', body: { name, mood, clip_id: c.clip_id } });
         await loadCharacters(); renderCharPanel(); renderClip();
         document.getElementById('new-char-name').value = '';
         document.getElementById('new-char-mood').value = '';
-    } catch (e) { alert('Add failed: ' + e.message); }
+    } catch (e) { alert(t('alert.add_char_failed') + e.message); }
 }
 
 // ── Bulk ─────────────────────────────────────
 
 async function translateAll() {
-    if (!confirm('Translate all pending clips?')) return;
-    showOverlay('Translating all...');
+    if (!confirm(t('confirm.translate_all'))) return;
+    showOverlay(t('overlay.translating_all'));
     try {
         await api('/api/translate-all', { method: 'POST' });
         startJobPolling('translate-all');
-        await pollProgress('translate-all', 'Translating');
+        await pollProgress('translate-all', 'overlay.translating', 'bulk.translate_complete');
         loadTimeline();
         if (currentClip) loadClip(currentClip.clip_id);
-    } catch (e) { alert('Translate all failed: ' + e.message); }
+    } catch (e) { alert(t('alert.translate_all_failed') + e.message); }
     hideOverlay();
 }
 async function cloneAll() {
-    if (!confirm('Clone all translated clips?')) return;
-    showOverlay('Cloning all...');
+    if (!confirm(t('confirm.clone_all'))) return;
+    showOverlay(t('overlay.cloning_all'));
     try {
         await api('/api/clone-all', { method: 'POST' });
         startJobPolling('clone-all');
-        await pollProgress('clone-all', 'Cloning');
+        await pollProgress('clone-all', 'overlay.cloning', 'bulk.clone_complete');
         loadTimeline();
         if (currentClip) loadClip(currentClip.clip_id);
-    } catch (e) { alert('Clone all failed: ' + e.message); }
+    } catch (e) { alert(t('alert.clone_all_failed') + e.message); }
     hideOverlay();
 }
-async function pollProgress(key, label) {
+async function pollProgress(key, overlayKey, completeKey) {
     let done = false;
     while (!done) {
         await sleep(200);
         try {
             const p = await api(`/api/${key}/progress`);
-            document.getElementById('overlay-msg').textContent = `${label}... ${p.current}/${p.total}`;
+            document.getElementById('overlay-msg').textContent = t(overlayKey) + ' ' + p.current + '/' + p.total;
             document.getElementById('bulk-status').textContent = p.message;
             if (p.done) done = true;
         } catch (e) { done = true; }
     }
-    document.getElementById('bulk-status').textContent = `${label} complete.`;
+    document.getElementById('bulk-status').textContent = t(completeKey);
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function saveProject() {
     await api('/api/save', { method: 'POST' });
-    document.getElementById('bulk-status').textContent = 'Saved.';
+    document.getElementById('bulk-status').textContent = t('bulk.status_saved');
 }
 async function assembleFull() {
-    if (!confirm('Assemble full episode?')) return;
-    showOverlay('Assembling...');
+    if (!confirm(t('confirm.assemble_full'))) return;
+    showOverlay(t('overlay.assembling'));
     try {
         const resp = await api('/api/assemble', { method: 'POST' });
-        alert('Done: ' + resp.final_path);
-    } catch (e) { alert('Assemble failed: ' + e.message); }
+        alert(t('alert.assemble_done_prefix') + resp.final_path);
+    } catch (e) { alert(t('alert.assemble_failed') + e.message); }
     hideOverlay();
 }
 function fmtTs(sec) {
@@ -1075,5 +1175,12 @@ function fmtTs(sec) {
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(4, '0')}`;
 }
 
-loadProjectPicker();
-refreshGpuStats();
+// ── Boot ─────────────────────────────────────
+(async () => {
+    const lang = localStorage.getItem('anidub.lang') || 'en';
+    document.getElementById('lang-select').value = lang;
+    await loadI18n(lang);
+    applyI18n();
+    loadProjectPicker();
+    refreshGpuStats();
+})();

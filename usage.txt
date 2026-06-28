@@ -1,12 +1,15 @@
-──────────────────────────ANIDUB USAGE──────────────────────────
+═══ ANIDUB USAGE ═══════════════════════════════
 
 
 SETUP
   First run (or after recreating .venv):
+    > .\install.ps1
+
+  Installs PyTorch CUDA, ffmpeg, all dependencies, and registers CLI commands.
+
+  If you already have the venv but need to re-register:
     > .\.venv\Scripts\Activate.ps1
     > pip install -e .
-
-  This registers the CLI commands. Run install.ps1 for full CUDA/deps setup.
 
 
 FOLDER SETUP
@@ -16,85 +19,80 @@ FOLDER SETUP
       Episode.Name.S01E02.mkv
       ...
 
-
-NORMAL WORKFLOW (single line test)
-
-  1  Discover a line to test:
-       anidub-test-voice --anime gabriel_dropout
-
-       Picks an anime → picks an episode → shows line picker → voices one line.
-       Output: test_output/{name}/{episode}/{date}/line_NNN/
-
-  2  Skip the line picker:
-       anidub-test-voice --anime gabriel_dropout --line 42
-
-  3  Direct MKV path (no discovery):
-       anidub-test-voice --mkv "anime/oreimo/Oreimo - 01.mkv" --line 10
+  Each MKV must have an embedded ASS subtitle track (or an .ass file
+  next to the MKV with the same stem). Japanese audio track required.
 
 
-BATCH A SINGLE EPISODE
+GUI WORKFLOW
+  Start the editor:
+    > anidub-edit
 
-       anidub-test-voice --batch --anime gabriel_dropout
+  Opens http://127.0.0.1:5000 in your browser.
 
-       Shows episode picker if multiple MKVs, then voices every line.
-       Output: batch_output/{name}/{episode}/{date}/
+  1 CREATING A PROJECT
+    Enter the anime folder name (e.g. gabriel_dropout) and click Open.
+    The editor discovers all MKVs, extracts audio/subtitle tracks, and
+    shows each episode as a card on the home screen.
 
+  2 OPENING AN EPISODE
+    Double-click an episode card to open the editor.
+      - Left sidebar shows clip list (subtitle lines)
+      - Center shows a timeline + video preview area
+      - Right sidebar shows the current clip's details
 
-BATCH ALL EPISODES IN A FOLDER
+  3 SETTING AUDIO & SUBTITLE TRACKS
+    Use the dropdowns in the top bar to select the Japanese audio track
+    and the correct subtitle track.
 
-       anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn
+  4 DEMUCS SEPARATION
+    Click "Separate Audio" in the toolbar. This runs once per episode
+    and splits the audio into vocals + background (no_vocals).
 
-       Processes every MKV in anime/hxh/ sequentially.
-       -y      skips the "Voice N lines?" confirmation
-       --auto  skips duplicate-line merge prompts during translation
-       --audio-lang jpn   skips the audio track picker
+  5 TRANSLATING
+    Translate All   → translates every clip in the episode via Google
+                       Translate (auto-detect → Esperanto)
+    Batch Translate → translates all selected episodes at once
+    Per-clip        → type a manual translation in the text area or
+                       click the Translate button
 
-       Use --range for a subset:
-       anidub-test-voice --batch --anime hxh --range 1-10
-       anidub-test-voice --batch --anime hxh --range 50-
+  6 VOICE CLONING
+    Clone All       → generates Esperanto voice for every translated
+                       clip in the current episode
+    Batch Clone     → generates voice for all selected episodes
+    Per-clip Clone  → generates voice for a single clip
 
-       Resuming after interruption (completed episodes are skipped):
-       anidub-test-voice --batch --anime hxh --range 15- -y --auto --audio-lang jpn
+  7 REVIEWING
+    Click any clip in the list to hear the cloned voice alongside the
+    original background audio (video preview). Adjust audio offset if
+    the voice timing is off. Click Accept or Reject.
 
-       This picks up at episode 15 (alphabetical order). Episodes 1-14
-       that already have final.mkv in their output dir are skipped.
+  8 ASSEMBLING
+    Click "Assemble" in the top bar to build the full dubbed episode.
+    Output: projects/{anime}/{episode}/out/{episode}_Dubbed.mkv
 
-
-TRANSLATION ONLY (no voicing)
-
-       anidub-test-voice --translate --anime gabriel_dropout
-       anidub-test-voice --translate --batch --anime hxh --range 1-10 -y --auto
-
-       Extracts embedded ASS from MKV, translates to Esperanto, writes _eo.ass.
-       Stops after translation — does NOT voice.
-
-
-UNATTENDED OVERNIGHT RUN
-
-       anidub-test-voice --batch --anime hxh -y --auto --audio-lang jpn --range 1-148
-
-       Zero prompts. Set it and go to work.
-
-
-OPTIONS
-
-  --mkv PATH         Direct path to a single MKV
-  --ass PATH         Direct path to a single ASS file
-  --anime NAME       Anime folder name under anime/
-
-  --batch            Voice all usable lines in the episode
-  --translate        Extract + translate embedded ASS (stops after translate unless --batch)
-  --auto             Skip merge prompts during translation
-  --yes, -y          Skip "Voice N lines?" confirmation
-
-  --range 1-10       Episode index range (with --batch --anime, 1-based, alphabetical)
-  --line N           Skip line picker, use specific subtitle index
-
-  --audio-lang jpn   Audio track language (e.g. jpn, eng)
-  --whisper-model    openai/whisper-tiny (default), -base, -small, -medium, -large-v3-turbo
-  --voice-timeout N  Seconds before aborting a stuck line (default 120)
+    Set "Complete" checkbox for an episode to skip it in future batches.
 
 
-KEYBOARD SHORTCUTS (during batch voicing)
+BATCH OPERATIONS (HOME SCREEN)
 
-  s     Skip the current line (no Enter needed)
+  Hold Shift + click to select multiple episode cards, then click:
+    Batch Translate   Translates all selected episodes.
+    Batch Clone       Generates Esperanto voice for all selected
+                      episodes.
+
+  Progress bars (Tr / Cl / Ac) on each card update live during
+  batch operations. Failed episodes are reported after completion.
+
+  Tracks can be chosen for the batch — the editor will prompt for
+  audio and subtitle track selection before starting.
+
+
+GPU MEMORY
+
+  The GPU indicator in the top-right corner shows VRAM usage.
+    Click it        → shows detailed panel with live tensors / reserved.
+    Clear GPU Memory   → frees cached but unused VRAM pool.
+    Force Unload       → drops all loaded TTS + Whisper models.
+
+  If VRAM exceeds 75% before a clone, the shared model is
+  automatically unloaded and recreated to keep within limits.
