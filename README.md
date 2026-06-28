@@ -1,7 +1,7 @@
 # Esperanto Anime Dubber
 
 Anime dubbing pipeline: separate audio into background + vocals, translate Japanese subtitles to Esperanto, then generate Esperanto voice tracks using the OmniVoice (k2-fsa) TTS model. All dubbing work happens in a browser-based editor — no CLI workflow commands required.
-![alt text](screenshots/image-8.png)
+![alt text](screenshots/coverimage.png)
 ## Disclaimer / Why?
 
 **This is a personal project developed and tested on a specific machine.**
