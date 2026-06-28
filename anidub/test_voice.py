@@ -767,9 +767,12 @@ def main():
         if not anime_dir.is_dir():
             console.print(f"[red]Anime folder not found: {anime_dir}[/]")
             return 1
-        mkvs = sorted(anime_dir.glob("*.mkv"))
+        mkvs = sorted(
+            f for f in anime_dir.glob("*")
+            if f.suffix.lower() in (".mkv", ".mp4")
+        )
         if not mkvs:
-            console.print(f"[red]No MKVs found in {anime_dir}[/]")
+            console.print(f"[red]No MKV/MP4 files found in {anime_dir}[/]")
             return 1
         if args.range:
             mkvs = _apply_range(mkvs, args.range)

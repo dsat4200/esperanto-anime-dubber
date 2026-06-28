@@ -270,7 +270,11 @@ async function goHome() {
 async function setupEditorForActive() {
     const tracks = await api('/api/tracks');
     if (!tracks.tracks_confirmed) {
-        showEpisodeTrackPicker(tracks);
+        if (tracks.subtitle_none) {
+            showNoSubsModal(tracks);
+        } else {
+            showEpisodeTrackPicker(tracks);
+        }
         return;
     }
     if (!tracks.demucs_done) {
@@ -284,7 +288,11 @@ async function setupEditorForActive() {
 async function setupEditor() {
     const tracks = await api('/api/tracks');
     if (!tracks.tracks_confirmed) {
-        showEpisodeTrackPicker(tracks);
+        if (tracks.subtitle_none) {
+            showNoSubsModal(tracks);
+        } else {
+            showEpisodeTrackPicker(tracks);
+        }
         return;
     }
     if (!tracks.demucs_done) {
@@ -704,6 +712,103 @@ async function confirmEpisodeTracks() {
 }
 
 function cancelEpisodeTracks() {
+    document.getElementById('track-modal').style.display = 'none';
+    goHome();
+}
+
+// ── No-subtitle transcription modal ──
+
+const TRANSCRIBE_MODELS = [
+    { value: 'openai/whisper-large-v3-turbo', label: 'Large v3 Turbo (most accurate)' },
+    { value: 'openai/whisper-medium',           label: 'Medium (accurate)' },
+    { value: 'openai/whisper-small',            label: 'Small (balanced)' },
+    { value: 'openai/whisper-base',             label: 'Base (fast)' },
+    { value: 'openai/whisper-tiny',             label: 'Tiny (fastest)' },
+];
+
+const TRANSCRIBE_LANGS = [
+    { value: '',        label: 'Auto-detect' },
+    { value: 'english',  label: 'English' },
+    { value: 'japanese', label: 'Japanese' },
+    { value: 'korean',   label: 'Korean' },
+    { value: 'chinese',  label: 'Chinese' },
+    { value: 'french',   label: 'French' },
+    { value: 'german',   label: 'German' },
+    { value: 'spanish',  label: 'Spanish' },
+    { value: 'portuguese', label: 'Portuguese' },
+    { value: 'russian',  label: 'Russian' },
+];
+
+function showNoSubsModal(data) {
+    const selAudio = data.selected_audio_idx;
+    const langOpts = TRANSCRIBE_LANGS.map(l =>
+        `<option value="${l.value}"${l.value === '' ? ' selected' : ''}>${l.label}</option>`
+    ).join('');
+    const modelOpts = TRANSCRIBE_MODELS.map((m, i) =>
+        `<option value="${m.value}"${i === 0 ? ' selected' : ''}>${m.label}</option>`
+    ).join('');
+
+    document.getElementById('modal-audio-tracks').innerHTML = '<h4>' + escHtml(t('modal.audio_label')) + '</h4>' +
+        data.audio.map((t, i) => {
+            const checked = (selAudio >= 0 && i === selAudio) || (selAudio < 0 && i === 0);
+            return `<label><input type="radio" name="m-audio" value="${i}" ${checked ? 'checked' : ''}> ${t.language||'?'} (${t.codec}, ${t.channels}ch)</label>`;
+        }).join('');
+
+    document.getElementById('modal-sub-tracks').innerHTML =
+        '<h4>' + escHtml(t('modal.language_label')) + '</h4>' +
+        `<select id="transcribe-lang">${langOpts}</select>` +
+        '<h4>' + escHtml(t('modal.model_label')) + '</h4>' +
+        `<select id="transcribe-model">${modelOpts}</select>`;
+
+    const modalEl = document.getElementById('track-modal');
+    modalEl.querySelector('h3').textContent = t('modal.no_subs_title');
+    modalEl.querySelector('.modal-hint').textContent = t('modal.no_subs_hint');
+    modalEl.querySelector('.modal-btns').innerHTML =
+        '<button class="primary" onclick="confirmTranscribe()" data-i18n="modal.generate_button">Generate</button>' +
+        '<button onclick="cancelTranscribe()" data-i18n="modal.cancel_button">Cancel</button>';
+    modalEl.style.display = 'flex';
+}
+
+async function confirmTranscribe() {
+    const audioIdx = parseInt(document.querySelector('input[name="m-audio"]:checked')?.value || '0');
+    const model = document.getElementById('transcribe-model').value;
+    const language = document.getElementById('transcribe-lang').value || null;
+    document.getElementById('track-modal').style.display = 'none';
+
+    showOverlay(t('overlay.transcribing'));
+    try {
+        await api('/api/transcribe', { method: 'POST', body: { audio_idx: audioIdx, model: model, language: language } });
+    } catch (e) {
+        hideOverlay();
+        alert(t('alert.transcribe_failed') + e.message);
+        return;
+    }
+    await pollTranscribe();
+}
+
+async function pollTranscribe() {
+    for (let i = 0; i < 600; i++) {
+        await sleep(2000);
+        try {
+            const p = await api('/api/transcribe/progress');
+            if (p.done) {
+                hideOverlay();
+                if (p.message && p.message.startsWith('Failed')) {
+                    alert(p.message);
+                    goHome();
+                    return;
+                }
+                await setupEditorContinue();
+                return;
+            }
+        } catch (e) { /* retry */ }
+    }
+    hideOverlay();
+    alert('Transcription timed out');
+    goHome();
+}
+
+function cancelTranscribe() {
     document.getElementById('track-modal').style.display = 'none';
     goHome();
 }

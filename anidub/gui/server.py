@@ -470,9 +470,11 @@ def api_tracks():
     if err: return err
     proj = _anime.get_active_project()
     source = proj.state.get("source", {})
+    subtitle_tracks = proj.get_subtitle_tracks()
     return jsonify({
         "audio": proj.get_audio_tracks(),
-        "subtitle": proj.get_subtitle_tracks(),
+        "subtitle": subtitle_tracks,
+        "subtitle_none": len(subtitle_tracks) == 0,
         "selected_audio_idx": source.get("audio_track_rel", -1),
         "selected_sub_idx": source.get("subtitle_track_rel", -1),
         "demucs_done": proj.state.get("demucs_done", False),
@@ -513,6 +515,53 @@ def api_tracks_confirm():
     proj.state["tracks_confirmed"] = True
     proj.save()
     return jsonify({"ok": True, "tracks_confirmed": True})
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    err = _require_project()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    proj = _anime.get_active_project()
+    audio_idx = data.get("audio_idx", 0)
+    model_name = data.get("model", "openai/whisper-large-v3-turbo")
+    language = data.get("language") or None
+
+    key = "transcribe"
+    _progress[key] = {"done": False, "message": "Starting..."}
+
+    def _run():
+        try:
+            _progress[key]["message"] = "Transcribing..."
+            audio_tracks = proj.get_audio_tracks()
+            if audio_idx >= len(audio_tracks):
+                raise IndexError(f"Audio index {audio_idx} out of range")
+            audio_path = proj._abs(audio_tracks[audio_idx]["path"])
+            out_ass = proj.path / "subtitle_track_generated.ass"
+
+            from anidub.transcribe import transcribe_full_audio
+            seg_count = transcribe_full_audio(
+                audio_path=audio_path,
+                out_ass_path=out_ass,
+                model_name=model_name,
+                language=language,
+            )
+            lang_tag = language or "auto"
+            proj.select_audio_track(int(audio_idx))
+            proj.add_subtitle_track(out_ass, language=lang_tag, title=f"Whisper ({model_name.split('/')[-1]})")
+            _progress[key] = {"done": True, "message": f"Done: {seg_count} segments"}
+        except Exception as e:
+            _log.exception("Transcription failed")
+            _progress[key] = {"done": True, "message": f"Failed: {e}"}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/transcribe/progress")
+def api_transcribe_progress():
+    p = _progress.get("transcribe", {"done": True, "message": ""})
+    return jsonify(p)
 
 
 @app.route("/api/demucs", methods=["POST"])

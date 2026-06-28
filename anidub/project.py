@@ -364,6 +364,25 @@ class Project:
         self._init_timeline(force=True)
         self.save()
 
+    def add_subtitle_track(self, ass_path: Path, language: str = "eng", title: str = "Generated") -> int:
+        rel_path = str(ass_path.relative_to(self.path))
+        subs = self.state["tracks"].setdefault("subtitle", [])
+        new_idx = len(subs)
+        subs.append({
+            "rel_index": new_idx,
+            "path": rel_path,
+            "language": language,
+            "title": title,
+            "codec": "ass",
+        })
+        self.state.setdefault("source", {})["subtitle_track_rel"] = new_idx
+        self.state["tracks_confirmed"] = True
+        self._ass_events = None
+        self._ass_header = None
+        self._init_timeline(force=True)
+        self.save()
+        return new_idx
+
     def run_demucs(self) -> tuple[Path, Path]:
         no_vocals_cache = self.path / "no_vocals.wav"
         vocals_cache = self.path / "vocals.wav"
@@ -1181,9 +1200,12 @@ class AnimeProject:
         if not anime_dir.is_dir():
             raise FileNotFoundError(f"Anime directory not found: {anime_dir}")
 
-        mkvs = sorted(anime_dir.glob("*.mkv"))
-        if not mkvs:
-            raise FileNotFoundError(f"No .mkv files found in {anime_dir}")
+        videos = sorted(
+            f for f in anime_dir.glob("*")
+            if f.suffix.lower() in (".mkv", ".mp4")
+        )
+        if not videos:
+            raise FileNotFoundError(f"No .mkv or .mp4 files found in {anime_dir}")
 
         path = PROJECTS_ROOT / anime_name
         path.mkdir(parents=True, exist_ok=True)
@@ -1196,11 +1218,11 @@ class AnimeProject:
             "episodes": [],
         }
 
-        for mkv in mkvs:
-            episode_dir = path / mkv.stem
+        for video in videos:
+            episode_dir = path / video.stem
             ap.state["episodes"].append({
-                "stem": mkv.stem,
-                "mkv_path": str(mkv.resolve()),
+                "stem": video.stem,
+                "mkv_path": str(video.resolve()),
                 "decomposed": episode_dir.is_dir() and (episode_dir / "project.json").exists(),
                 "title": None,
                 "completed": False,

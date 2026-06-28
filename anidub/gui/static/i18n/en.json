@@ -90,6 +90,11 @@
   "modal.run_button": "Run",
   "modal.cancel_button": "Cancel",
   "modal.confirm_button": "Confirm",
+  "modal.no_subs_title": "No Subtitle Track Detected",
+  "modal.no_subs_hint": "Generate one from the audio track using Whisper?",
+  "modal.language_label": "Language",
+  "modal.model_label": "Model",
+  "modal.generate_button": "Generate",
 
   "overlay.loading_project": "Loading project...",
   "overlay.creating_project": "Creating project...",
@@ -106,6 +111,7 @@
   "overlay.translating_episodes": "Translating episodes...",
   "overlay.cloning_episodes": "Cloning episodes...",
   "overlay.saving": "Saving...",
+  "overlay.transcribing": "Transcribing audio (may take several minutes)...",
 
   "batch.btn_label": "Batch Jobs",
   "batch.panel_title": "Batch Jobs",
@@ -136,6 +142,7 @@
   "alert.assemble_failed": "Assemble failed: ",
   "alert.assemble_done_prefix": "Done: ",
   "alert.track_confirm_failed": "Track selection failed: ",
+  "alert.transcribe_failed": "Transcription failed: ",
   "alert.save_char_failed": "Save failed: ",
   "alert.add_char_failed": "Add failed: ",
   "alert.enter_name": "Enter a name",

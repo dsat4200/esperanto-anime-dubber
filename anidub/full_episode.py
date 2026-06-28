@@ -22,10 +22,6 @@ _SILENCE_THRESHOLD = 1e-4
 _TARGET_VOICE_PEAK = 0.5
 _HEADROOM_TARGET = 0.95
 
-_MKVMERGE_HINT_PATHS = (
-    r"C:\Program Files\MKVToolNix\mkvmerge.exe",
-    r"C:\Program Files (x86)\MKVToolNix\mkvmerge.exe",
-)
 _EPO_AUDIO_FILENAME = "epo_audio.mka"
 
 
@@ -38,19 +34,6 @@ def _ffmpeg_bin():
 
 def _ffprobe_bin():
     return str(Path(_ffmpeg_bin()).parent / "ffprobe.exe")
-
-
-def _mkvmerge_bin() -> str:
-    found = shutil.which("mkvmerge")
-    if found:
-        return found
-    for p in _MKVMERGE_HINT_PATHS:
-        if Path(p).is_file():
-            return p
-    raise FileNotFoundError(
-        "mkvmerge not found on PATH or in C:\\Program Files\\MKVToolNix. "
-        "Install MKVToolNix: https://mkvtoolnix.download/"
-    )
 
 
 _CODEC_DISPATCH = {
@@ -82,27 +65,33 @@ def _codec_id_to_ffenc(codec_str: str) -> tuple[str, str | None, int | None]:
     return _CODEC_DISPATCH.get(codec_key, ("aac", "256k", None))
 
 
-def _probe_mkvmerge_tracks(file: Path) -> list[dict]:
-    mkvmerge = _mkvmerge_bin()
-    cmd = [mkvmerge, "-J", str(file)]
-    _log.info("mkvmerge -J cmd: %s", " ".join(cmd))
+def _probe_ffprobe_tracks(file: Path) -> list[dict]:
+    ffprobe = _ffprobe_bin()
+    cmd = [ffprobe, "-v", "error",
+           "-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title",
+           "-of", "json", str(file)]
+    _log.info("ffprobe cmd: %s", " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        _log.error("mkvmerge identify FAILED rc=%d", proc.returncode)
-        _log.error("mkvmerge stdout:\n%s", proc.stdout)
-        _log.error("mkvmerge stderr:\n%s", proc.stderr)
+        _log.error("ffprobe FAILED rc=%d stderr:\n%s", proc.returncode, proc.stderr or "(empty)")
         raise RuntimeError(
-            f"mkvmerge -J failed (rc={proc.returncode}) on {file}. "
-            f"output:\n{proc.stdout or proc.stderr or '(empty)'}"
+            f"ffprobe failed (rc={proc.returncode}) on {file}. "
+            f"stderr:\n{proc.stderr or '(empty)'}"
         )
     data = _json.loads(proc.stdout)
-    tracks = data.get("tracks", [])
+    tracks: list[dict] = []
+    for s in data.get("streams", []):
+        tags = s.get("tags", {}) or {}
+        tracks.append({
+            "index": s["index"],
+            "type": s.get("codec_type"),
+            "codec": s.get("codec_name", ""),
+            "language": tags.get("language", ""),
+            "title": tags.get("title", ""),
+        })
     for t in tracks:
-        props = t.get("properties", {}) or {}
-        _log.info("  track id=%s type=%s codec=%s lang=%r lang_ietf=%r name=%r default=%s",
-                  t.get("id"), t.get("type"), t.get("codec_id"),
-                  props.get("language"), props.get("language_ietf"),
-                  props.get("track_name"), props.get("default_track"))
+        _log.info("  track idx=%d type=%s codec=%s lang=%r title=%r",
+                  t["index"], t["type"], t["codec"], t["language"], t["title"])
     return tracks
 
 
@@ -145,14 +134,6 @@ def _encode_epo_audio(dubbed_wav: Path, out_mka: Path, source_codec_id: str) -> 
     _log.info("epo_audio encoded OK -> %s (%d bytes)",
               out_mka, out_mka.stat().st_size if out_mka.exists() else 0)
     return out_mka
-_TARGET_VOICE_PEAK = 0.5
-
-
-def _ffmpeg_bin():
-    loc = get_ffmpeg_location()
-    if not loc:
-        raise RuntimeError("ffmpeg not found")
-    return str(Path(loc) / "ffmpeg.exe")
 
 
 def _resample_mono(wav: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
@@ -414,19 +395,8 @@ def build_full_episode(
     _log.info("full_dubbed.wav written OK")
 
     # ═══════════════════════════════════════════
-    #  Final mux (two-stage: ffmpeg-encode Epo audio -> mkvmerge)
+    #  Final mux: ffmpeg-encode Epo audio, then ffmpeg-assemble MKV
     # ═══════════════════════════════════════════
-    # Output goes to projects/{anime}/exported episodes/{stem}_Dubbed.mkv
-    # (batch_out_dir is projects/{anime}/{stem}, so its parent is projects/{anime}).
-    #
-    # Why two stages? The ffmpeg Matroska muxer has three intentional
-    # limitations that break strict players (VLC/PotPlayer/WMP):
-    #   1. It NEVER writes FlagDefault=1 (only clears to 0; relies on EBML default)
-    #      — strict players treat "missing" as 0 → Epo tracks never auto-select.
-    #   2. It NEVER writes LanguageBCP47, only the legacy Language element.
-    #   3. It always emits Audio.BitDepth for opus (meaningless for lossy codecs).
-    # mkvmerge writes all three correctly. So we use ffmpeg just to encode the
-    # Epo audio bitstream (its one good job) and let mkvmerge assemble the MKV.
     ep_name = mkv_path.stem
     export_dir = batch_out_dir.parent / "exported episodes"
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -443,117 +413,89 @@ def build_full_episode(
     if not Path(dubbed_wav).is_file():
         raise FileNotFoundError(f"dubbed WAV not found: {dubbed_wav}")
 
-    mkvmerge = _mkvmerge_bin()
-    _log.info("mkvmerge = %s", mkvmerge)
+    ffmpeg = _ffmpeg_bin()
 
-    _log.info("--- probing source MKV tracks ---")
-    src_tracks = _probe_mkvmerge_tracks(mkv_path)
-    src_video = [t for t in src_tracks if t.get("type") == "video"]
-    src_audios = [t for t in src_tracks if t.get("type") == "audio"]
-    src_subs = [t for t in src_tracks if t.get("type") == "subtitles"]
+    _log.info("--- probing source tracks ---")
+    src_tracks = _probe_ffprobe_tracks(mkv_path)
+    src_video = [t for t in src_tracks if t["type"] == "video"]
+    src_audios = [t for t in src_tracks if t["type"] == "audio"]
+    src_subs = [t for t in src_tracks if t["type"] == "subtitle"]
     _log.info("src summary: video=%d audio=%d subs=%d",
               len(src_video), len(src_audios), len(src_subs))
     if not src_video:
         raise RuntimeError(f"No video track found in {mkv_path}")
-    if not src_audios:
-        _log.warning("source MKV has no audio tracks; Epo dub will be the only audio")
 
-    src_audio_codec_id = ""
+    src_audio_codec = ""
     if src_audios:
-        a0 = src_audios[0]
-        src_audio_codec_id = (a0.get("properties", {}) or {}).get("codec_id") or a0.get("codec") or ""
+        src_audio_codec = src_audios[0].get("codec", "")
 
-    _log.info("--- encoding Esperanto audio (ffmpeg) ---")
+    _log.info("--- encoding Esperanto audio ---")
     epo_mka = _encode_epo_audio(dubbed_wav,
                                 batch_out_dir / _EPO_AUDIO_FILENAME,
-                                src_audio_codec_id)
+                                src_audio_codec)
 
-    _log.info("--- probing epo_mka ---")
-    eo_aud_tracks = _probe_mkvmerge_tracks(epo_mka)
-    eo_aud = [t for t in eo_aud_tracks if t.get("type") == "audio"]
-    if not eo_aud:
-        raise RuntimeError(f"No audio track found in {epo_mka}")
-    eo_aud_id = eo_aud[0].get("id")
-    _log.info("epo audio id in mka: %s", eo_aud_id)
+    _log.info("--- ffmpeg final mux ---")
+    cmd: list[str] = [ffmpeg, "-y", "-loglevel", "error"]
+    cmd += ["-i", str(mkv_path)]
+    cmd += ["-i", str(epo_mka)]
+    cmd += ["-i", str(eo_ass_path)]
 
-    mkvmerge_cmd: list[str] = [
-        mkvmerge, "-o", str(final_mkv),
-    ]
+    for vt in src_video:
+        cmd += ["-map", f"0:{vt['index']}"]
+    cmd += ["-c:v", "copy"]
 
-    # Input 0: Epo audio (mka). Give language/title/default inline.
-    mkvmerge_cmd += [
-        "--language", f"{eo_aud_id}:epo",
-        "--track-name", f"{eo_aud_id}:Esperanto Dub",
-        "--default-track-flag", f"{eo_aud_id}:yes",
-        "--no-attachments",
-        str(epo_mka),
-    ]
-
-    # Input 1: source MKV. Clear default on every original audio + sub track so
-    # the Epo tracks become the auto-selected ones. mkvmerge automatically
-    # carries video, attachments (fonts), and chapters from this input.
+    cmd += ["-map", "1:a:0"]
     for at in src_audios:
-        tid = at.get("id")
-        mkvmerge_cmd += [f"--default-track-flag", f"{tid}:no"]
+        cmd += ["-map", f"0:{at['index']}"]
+    cmd += ["-c:a", "copy"]
+
+    cmd += ["-map", "2:s:0"]
     for st in src_subs:
-        tid = st.get("id")
-        mkvmerge_cmd += [f"--default-track-flag", f"{tid}:no"]
-    mkvmerge_cmd += [str(mkv_path)]
+        cmd += ["-map", f"0:{st['index']}"]
+    cmd += ["-c:s", "copy"]
 
-    # Input 2: Epo ASS. Language=epo, title=Esperanto, default.
-    # On an external .ass file mkvmerge gives every Dialogue line the id 0.
-    mkvmerge_cmd += [
-        "--language", "0:epo",
-        "--track-name", "0:Esperanto",
-        "--default-track-flag", "0:yes",
-        str(eo_ass_path),
-    ]
+    cmd += ["-metadata:s:a:0", "language=epo",
+            "-metadata:s:a:0", "title=Esperanto Dub",
+            "-disposition:a:0", "default"]
+    for i, at in enumerate(src_audios):
+        a_idx = i + 1
+        lang = at.get("language", "")
+        title = at.get("title", "")
+        cmd += [f"-disposition:a:{a_idx}", "0"]
+        if lang:
+            cmd += [f"-metadata:s:a:{a_idx}", f"language={lang}"]
+        if title:
+            cmd += [f"-metadata:s:a:{a_idx}", f"title={title}"]
 
-    # --track-order: required so Epo audio+sub land in their preferred positions.
-    # cmdline input-index:track-id pairs.
-    #   video  <- src.video (input 1)
-    #   audio1 <- epo_audio (input 0)
-    #   audio2 <- src.audio[0] (input 1)
-    #   audio3 <- src.audio[1] (input 1) ...
-    #   sub1   <- eo_ass (input 2)
-    #   sub2.. <- src.subs[*] (input 1)
-    order: list[str] = []
-    order.append(f"1:{src_video[0].get('id')}")
-    order.append(f"0:{eo_aud_id}")
-    for at in src_audios:
-        order.append(f"1:{at.get('id')}")
-    # Epo ASS has one track, id 0 by mkvmerge convention for external text files.
-    order.append("2:0")
-    for st in src_subs:
-        order.append(f"1:{st.get('id')}")
-    mkvmerge_cmd += ["--track-order", ",".join(order)]
-    _log.info("track-order: %s", ",".join(order))
+    cmd += ["-metadata:s:s:0", "language=epo",
+            "-metadata:s:s:0", "title=Esperanto",
+            "-disposition:s:0", "default"]
+    for i, st in enumerate(src_subs):
+        s_idx = i + 1
+        lang = st.get("language", "")
+        title = st.get("title", "")
+        cmd += [f"-disposition:s:{s_idx}", "0"]
+        if lang:
+            cmd += [f"-metadata:s:s:{s_idx}", f"language={lang}"]
+        if title:
+            cmd += [f"-metadata:s:s:{s_idx}", f"title={title}"]
 
-    _log.info("mkvmerge cmd (%d tokens):", len(mkvmerge_cmd))
-    _log.info("  %s", " ".join(f'"{a}"' if " " in str(a) else str(a) for a in mkvmerge_cmd))
+    cmd += [str(final_mkv)]
 
-    _log.info("--- running mkvmerge ---")
-    # mkvmerge rc: 0 = success, 1 = success with warnings, 2 = error.
-    mm_proc = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
-    _log.info("mkvmerge rc=%d", mm_proc.returncode)
-    if mm_proc.stdout:
-        _log.info("mkvmerge stdout:\n%s", mm_proc.stdout)
-    if mm_proc.stderr:
-        _log.info("mkvmerge stderr:\n%s", mm_proc.stderr)
-    if mm_proc.returncode == 2:
-        # Check if file was produced anyway (mkvmerge sometimes writes despite rc=2).
-        if final_mkv.exists():
-            _log.warning("mkvmerge rc=2 but output file exists; proceeding with caution")
-        else:
-            raise RuntimeError(
-                f"mkvmerge failed (rc={mm_proc.returncode}). "
-                f"stderr:\n{mm_proc.stderr or mm_proc.stdout or '(empty)'}"
-            )
-    elif mm_proc.returncode == 1:
-        _log.warning("mkvmerge succeeded WITH WARNINGS (rc=1) — verify output manually")
-    else:
-        _log.info("mkvmerge OK -> %s (%d bytes)",
-                  final_mkv, final_mkv.stat().st_size if final_mkv.exists() else 0)
+    _log.info("ffmpeg mux cmd (%d tokens):", len(cmd))
+    _log.info("  %s", " ".join(f'"{a}"' if " " in str(a) else str(a) for a in cmd))
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        _log.error("ffmpeg mux FAILED rc=%d stderr:\n%s", proc.returncode, proc.stderr or "(empty)")
+        raise RuntimeError(
+            f"ffmpeg mux failed (rc={proc.returncode}). "
+            f"stderr:\n{proc.stderr or '(empty)'}"
+        )
+    if proc.stderr:
+        _log.info("ffmpeg mux stderr (rc=0):\n%s", proc.stderr)
+    _log.info("ffmpeg mux OK -> %s (%d bytes)",
+              final_mkv, final_mkv.stat().st_size if final_mkv.exists() else 0)
 
     export_ass_copy = batch_out_dir / f"{ep_name}_Dubbed.ass"
     try:

@@ -40,13 +40,16 @@ def discover_anime(root: Path = ANIME_ROOT) -> list[dict]:
     for subdir in sorted(root.iterdir()):
         if not subdir.is_dir():
             continue
-        mkvs = sorted(subdir.glob("*.mkv"))
-        for mkv in mkvs:
+        videos = sorted(
+            f for f in subdir.glob("*")
+            if f.suffix.lower() in (".mkv", ".mp4")
+        )
+        for video in videos:
             ass_files = sorted(subdir.glob("*.ass"))
             ass_eo = [a for a in ass_files if a.stem.endswith("_eo") or a.stem.endswith(".eo")]
             results.append({
                 "name": subdir.name,
-                "mkv": mkv,
+                "mkv": video,
                 "ass_dir": subdir,
                 "ass_all": ass_files,
                 "ass_eo": ass_eo,
