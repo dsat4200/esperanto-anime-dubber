@@ -1,7 +1,7 @@
 # anidub
 
 Animedubla dukto: apartigu audio en fonon + kanton, traduku japanajn subtekstojn al Esperanto, poste kreu Esperantajn voĉajn trakojn per la OmniVoice (k2-fsa) TTS-modelo. Ĉiuj dubladaj laboroj okazas en retumila redaktilo - neniuj CLI-laborfluaj komandoj necesas.
-
+![alt text](image-8.png)
 ## Malgarantio
 
 **Ĉi tio estas persona projekto evoluigita kaj testita sur specifa maŝino.**
@@ -110,7 +110,7 @@ anidub-edit
 ```
 
 Malfermas `http://127.0.0.1:5000` en via retumilo. Laŭvolaj flagoj: `--port N`, `--host ADDR`, `--project PATH` (malfermu ekzistantan projekton dum ekfunkciigo).
-
+![alt text](image.png)
 <!-- SCREENCAP: anidub-edit window just opened, empty home screen -->
 
 ---
@@ -134,7 +134,7 @@ Duoble alklaku epizodkarton por malfermi la redaktilon.
 - **Malsupro** — templinibreto montranta ĉiun klipo en la epizodo, kolorkodita laŭ stato.
 
 <!-- SCREENCAP: editor view with a clip loaded, left + right panes visible -->
-
+![alt text](image-1.png)
 ---
 
 ## 3. Aŭdio + Subtitolaj Trakoj
