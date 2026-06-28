@@ -1,7 +1,7 @@
 # Esperanto Anime Dubber
 
 Anime dubbing pipeline: separate audio into background + vocals, translate Japanese subtitles to Esperanto, then generate Esperanto voice tracks using the OmniVoice (k2-fsa) TTS model. All dubbing work happens in a browser-based editor — no CLI workflow commands required.
-![alt text](image-8.png)
+![alt text](screenshots/image-8.png)
 ## Disclaimer
 
 **This is a personal project developed and tested on a specific machine.**
@@ -112,7 +112,7 @@ anidub-edit
 Opens `http://127.0.0.1:5000` in your browser. Optional flags: `--port N`, `--host ADDR`, `--project PATH` (open an existing project on startup).
 
 <!-- SCREENCAP: anidub-edit window just opened, empty home screen -->
-![alt text](image.png)
+![alt text](screenshots/image.png)
 ---
 
 ## 1. Creating a Project
@@ -134,7 +134,7 @@ Double-click an episode card to open the editor.
 - **Bottom** — timeline bar showing every clip in the episode, color-coded by status.
 
 <!-- SCREENCAP: editor view with a clip loaded, left + right panes visible -->
-![alt text](image-1.png)
+![alt text](screenshots/image-1.png)
 ---
 
 ## 3. Audio + Subtitle Tracks
@@ -148,8 +148,8 @@ When you trigger a **Batch Translate** or **Batch Clone** on multiple episodes, 
 For a single-episode open, the editor auto-selects the first audio + subtitle tracks. Episode cards must already be set up via the modal before running batch operations.
 
 <!-- SCREENCAP: track-picker modal showing audio and subtitle radio choices -->
-![alt text](image-2.png)
-![alt text](image-9.png)
+![alt text](screenshots/image-2.png)
+![alt text](screenshots/image-9.png)
 ---
 
 ## 4. Demucs Separation
@@ -162,7 +162,7 @@ The first time you open an episode, the editor automatically runs Demucs (`htdem
 This runs once per episode and may take a few minutes. A status overlay shows progress.
 
 <!-- SCREENCAP: "Running Demucs (may take a few minutes)..." overlay -->
-![alt text](image-3.png)
+![alt text](screenshots/image-3.png)
 ---
 
 ## 5. Translating
@@ -176,7 +176,7 @@ Three ways to translate subtitle lines to Esperanto:
 Translated lines are visible immediately in the right pane. The clip's status changes from `pending` to `translated`.
 
 <!-- SCREENCAP: clip with original text + translation box filled, status showing "translated" -->
-![alt text](image-4.png)
+![alt text](screenshots/image-4.png)
 ---
 
 ## 6. Voice Cloning
@@ -208,7 +208,7 @@ OmniVoice (k2-fsa) generates Esperanto speech cloned from a ~3-second reference 
   - Right-click a clip for **Delete clip** or **Toggle sign/audio**.
 
 <!-- SCREENCAP: timeline bar showing mixed-status clips, with the current clip highlighted -->
-![alt text](image-5.png)
+![alt text](screenshots/image-5.png)
 ---
 
 ## 8. Characters & Moods
@@ -223,7 +223,7 @@ To reuse a voice print across episodes:
 The **Manage** button opens the character panel, which lists every character×mood pair and lets you delete individual entries. Before cloning, set the Character + Mood dropdowns — OmniVoice will use that voice print for the generated clip.
 
 <!-- SCREENCAP: character Manage panel showing multiple characters with moods -->
-![alt text](image-6.png)
+![alt text](screenshots/image-6.png)
 ---
 
 ## 9. Signs / Non-Dubbed Clips
@@ -286,7 +286,7 @@ Next to the **Home** button, a **Language** dropdown lets you switch the editor 
 The choice is saved in `localStorage`, so it persists across browser sessions. Switching re-renders the current clip, episode home, timeline, and GPU panel in the chosen language. Status enum words (`pending`, `translated`, `cloned`, `accepted`, `rejected`, `sign`, `non_dub`) are also localized; the timeline color coding is unchanged.
 
 <!-- SCREENCAP: header showing the language dropdown with Esperanto selected and UI text in Esperanto -->
-![alt text](image-7.png)
+![alt text](screenshots/image-7.png)
 ---
 
 ## How It Works

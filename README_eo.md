@@ -1,7 +1,7 @@
 # AniDub EO
 
 Animedubla dukto: apartigu audio en fonon + kanton, traduku japanajn subtekstojn al Esperanto, poste kreu Esperantajn voĉajn trakojn per la OmniVoice (k2-fsa) TTS-modelo. Ĉiuj dubladaj laboroj okazas en retumila redaktilo - neniuj CLI-laborfluaj komandoj necesas.
-![alt text](image-8.png)
+![alt text](screenshots/image-8.png)
 ## Malgarantio
 
 **Ĉi tio estas persona projekto evoluigita kaj testita sur specifa maŝino.**
@@ -110,7 +110,7 @@ anidub-edit
 ```
 
 Malfermas `http://127.0.0.1:5000` en via retumilo. Laŭvolaj flagoj: `--port N`, `--host ADDR`, `--project PATH` (malfermu ekzistantan projekton dum ekfunkciigo).
-![alt text](image.png)
+![alt text](screenshots/image.png)
 <!-- SCREENCAP: anidub-edit window just opened, empty home screen -->
 
 ---
@@ -134,7 +134,7 @@ Duoble alklaku epizodkarton por malfermi la redaktilon.
 - **Malsupro** — templinibreto montranta ĉiun klipo en la epizodo, kolorkodita laŭ stato.
 
 <!-- SCREENCAP: editor view with a clip loaded, left + right panes visible -->
-![alt text](image-1.png)
+![alt text](screenshots/image-1.png)
 ---
 
 ## 3. Aŭdio + Subtitolaj Trakoj
@@ -148,7 +148,7 @@ Kiam vi ekigas **Batch Translate** aŭ **Batch Clone** en pluraj epizodoj, la re
 Por unu-epizodo malfermita, la redaktilo aŭtomate elektas la unuajn sonajn + subtitolojn. Epizodkartoj jam devas esti starigitaj per la modalo antaŭ ol ruli batajn operaciojn.
 
 <!-- SCREENCAP: track-picker modal showing audio and subtitle radio choices -->
-![alt text](image-2.png)
+![alt text](screenshots/image-2.png)
 ---
 
 ## 4. Demucs Apartigo
@@ -159,7 +159,7 @@ La unuan fojon kiam vi malfermas epizodon, la redaktilo aŭtomate rulas Demucs (
 - `no_vocals.wav` (fona muziko + SFX)
 
 Ĉi tio funkcias unufoje por epizodo kaj povas daŭri kelkajn minutojn. Statuskovraĵo montras progreson.
-![alt text](image-3.png)
+![alt text](screenshots/image-3.png)
 <!-- SCREENCAP: "Running Demucs (may take a few minutes)..." overlay -->
 
 ---
@@ -175,7 +175,7 @@ Tri manieroj traduki subtitolliniojn al Esperanto:
 Tradukitaj linioj estas videblaj tuj en la dekstra panelo. La statuso de la klipo ŝanĝiĝas de `pritraktata` al `tradukita`.
 
 <!-- SCREENCAP: clip with original text + translation box filled, status showing "translated" -->
-![alt text](image-4.png)
+![alt text](screenshots/image-4.png)
 ---
 
 ## 6. Voĉa Klonado
@@ -207,7 +207,7 @@ OmniVoice (k2-fsa) generas Esperanto-paroladon klonitan el ~3-sekunda referenckl
 - Dekstre alklaku klipo por **Forigi klipo** aŭ **Ŝanku signon/aŭdon**.
 
 <!-- SCREENCAP: timeline bar showing mixed-status clips, with the current clip highlighted -->
-![alt text](image-5.png)
+![alt text](screenshots/image-5.png)
 ---
 
 ## 8. Karakteroj & Humoroj
@@ -222,7 +222,7 @@ Por reuzi voĉan presaĵon tra epizodoj:
 La butono **Administri** malfermas la signopanelon, kiu listigas ĉiun signan×humoran paron kaj ebligas al vi forigi individuajn enskribojn. Antaŭ kloni, agordu la menuojn Karaktero + Humoro — OmniVoice uzos tiun voĉan presaĵon por la generita klipo.
 
 <!-- SCREENCAP: character Manage panel showing multiple characters with moods -->
-![alt text](image-6.png)
+![alt text](screenshots/image-6.png)
 ---
 
 ## 9. Signoj / Ne-Dubitaj Klipoj
@@ -285,7 +285,7 @@ Apud la butono **Hejmo**, falmenuo **Lingvo** ebligas al vi ŝanĝi la redaktila
 La elekto estas konservita en `localStorage', do ĝi daŭras tra foliumilaj sesioj. Ŝanĝi reprezentas la nunan klipo, epizodo-hejmon, templinion kaj GPU-panelon en la elektita lingvo. Statusaj enumvortoj (`pending`, `translated`, `cloned`, `akcepted`, `rejected`, `signo`, `ne_dub`) ankaŭ estas lokalizitaj; la templinia kolorkodado estas senŝanĝa.
 
 <!-- SCREENCAP: header showing the language dropdown with Esperanto selected and UI text in Esperanto -->
-![alt text](image-7.png)
+![alt text](screenshots/image-7.png)
 ---
 
 ## Kiel Ĝi Funkcias
