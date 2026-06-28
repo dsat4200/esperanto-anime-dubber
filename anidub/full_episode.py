@@ -37,7 +37,7 @@ def _ffprobe_bin():
 
 
 _CODEC_DISPATCH = {
-    "opus":   ("libopus",    "256k", 48000),
+    "opus":   ("opus",       "256k", 48000),
     "aac":    ("aac",        "256k", None),
     "flac":   ("flac",       None,   None),
     "mp3":    ("libmp3lame", "320k", None),
@@ -436,6 +436,7 @@ def build_full_episode(
 
     _log.info("--- ffmpeg final mux ---")
     cmd: list[str] = [ffmpeg, "-y", "-loglevel", "error"]
+    cmd += ["-fflags", "+genpts+igndts"]
     cmd += ["-i", str(mkv_path)]
     cmd += ["-i", str(epo_mka)]
     cmd += ["-i", str(eo_ass_path)]

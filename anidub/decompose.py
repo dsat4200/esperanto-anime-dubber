@@ -20,7 +20,7 @@ def _probe_all_streams(mkv_path: Path) -> list[dict]:
     out = subprocess.run([
         _ffprobe_bin(), "-v", "error",
         "-show_entries",
-        "stream=index,codec_type,codec_name,channels,sample_rate:stream_tags=language,title",
+        "stream=index,codec_type,codec_name,codec_tag_string,channels,sample_rate:stream_tags=language,title",
         "-of", "json", str(mkv_path),
     ], capture_output=True, text=True, check=True).stdout
     info = json.loads(out)
@@ -28,10 +28,11 @@ def _probe_all_streams(mkv_path: Path) -> list[dict]:
     for s in info.get("streams", []):
         tags = s.get("tags", {})
         codec_type = s.get("codec_type", "")
+        codec_name = s.get("codec_name") or s.get("codec_tag_string") or "?"
         entry = {
             "index": s["index"],
             "type": codec_type,
-            "codec": s.get("codec_name", "?"),
+            "codec": codec_name,
             "language": tags.get("language", ""),
             "title": tags.get("title", ""),
         }
@@ -68,14 +69,21 @@ def decompose_mkv(mkv_path: Path, out_dir: Path) -> dict:
         elif s["type"] == "audio":
             idx = len(audio_tracks)
             audio_out = out_dir / f"audio_track_{idx}.wav"
-            subprocess.run([
-                ffmpeg, "-y", "-loglevel", "error",
-                "-i", str(mkv_path),
-                "-map", f"0:{s['index']}",
-                "-ar", "44100",
-                "-ac", "2",
-                str(audio_out),
-            ], check=True)
+            try:
+                subprocess.run([
+                    ffmpeg, "-y", "-loglevel", "error",
+                    "-i", str(mkv_path),
+                    "-map", f"0:{s['index']}",
+                    "-c:a", "pcm_s16le",
+                    "-ar", "44100",
+                    "-ac", "2",
+                    str(audio_out),
+                ], capture_output=True, text=True, check=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(
+                    f"Failed to extract audio track {idx} (codec={s['codec']}): "
+                    f"ffmpeg stderr:\n{e.stderr or '(empty)'}"
+                ) from e
             audio_tracks.append({
                 "index": s["index"],
                 "rel_index": idx,
