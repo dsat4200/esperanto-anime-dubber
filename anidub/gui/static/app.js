@@ -507,6 +507,10 @@ async function cloneCurrent() {
 async function previewCurrent() {
     const c = currentClip;
     if (!c) return;
+    if (c.status === 'non_dub') {
+        loadRawPreview(c.start_sec, c.end_sec);
+        return;
+    }
     showOverlay(t('overlay.generating_preview'));
     try {
         const resp = await api(`/api/clips/${c.clip_id}/preview`, { method: 'POST' });

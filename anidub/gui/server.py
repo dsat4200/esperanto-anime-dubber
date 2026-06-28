@@ -1024,6 +1024,11 @@ def api_playback_segment():
         pb = proj.path / "_playback" / (clip_id[2:] + ".mp4")
         if pb.exists() and pb.stat().st_size > 1024:
             return _send_file_range(str(pb), "video/mp4")
+        range_key = "op_range" if clip_id == "__op__" else "ed_range"
+        op_ed_start, op_ed_end = proj.state.get(range_key, (0.0, 0.0))
+        if op_ed_end > op_ed_start:
+            start = str(op_ed_start)
+            end = str(op_ed_end)
 
     # ── cloned clip with existing playback.mp4 ──
     if clip_id:
@@ -1112,13 +1117,8 @@ def api_playback_generate_previews():
                     from anidub.assembler import _slice_audio
                     from anidub.extract import extract_video_clip
                     from anidub.assembler import _mux_playback
-                    no_vocals_cache = proj.path / "no_vocals.wav"
-                    if not no_vocals_cache.exists():
-                        proj.run_demucs()
                     video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
                     op_dur = op_e - op_s
-                    bg = op_dir / "_op_bg.wav"
-                    _slice_audio(no_vocals_cache, op_s, op_dur, bg)
                     audio_src = proj._audio_path()
                     audio_clip = op_dir / "_op_audio.wav"
                     _slice_audio(audio_src, op_s, op_dur, audio_clip)
@@ -1141,13 +1141,8 @@ def api_playback_generate_previews():
                     from anidub.assembler import _slice_audio
                     from anidub.extract import extract_video_clip
                     from anidub.assembler import _mux_playback
-                    no_vocals_cache = proj.path / "no_vocals.wav"
-                    if not no_vocals_cache.exists():
-                        proj.run_demucs()
                     video_src = proj._abs(proj.state.get("video_only", "video_only.mkv"))
                     ed_dur = ed_e - ed_s
-                    bg = ed_dir / "_ed_bg.wav"
-                    _slice_audio(no_vocals_cache, ed_s, ed_dur, bg)
                     audio_src = proj._audio_path()
                     ed_audio = ed_dir / "_ed_audio.wav"
                     _slice_audio(audio_src, ed_s, ed_dur, ed_audio)
